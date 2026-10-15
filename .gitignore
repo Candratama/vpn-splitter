@@ -1,0 +1,22 @@
+# Local routing configuration and infrastructure inventory.
+/config.txt*
+/vpn-coverage*
+/private/
+/local/
+/.scratch/
+/.worktrees/
+*.state
+*.state/
+*.log
+
+# Credentials and local databases.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store

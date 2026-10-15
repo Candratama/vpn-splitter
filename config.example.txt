@@ -1,0 +1,5 @@
+# Copy this file to config.txt, then replace the placeholder below.
+# One office IPv4 address, CIDR, or hostname per line.
+# Full URLs and wildcard domains are not supported.
+# config.txt stays local and is excluded from Git.
+office.example.invalid
