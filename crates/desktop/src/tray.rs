@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_tray::{Icon, Tray};
 
-actions!(vpn_splitter, [OpenSettings, Quit]);
+actions!(vpn_splitter, [OpenSettings, HideSettings, Quit]);
 
 struct Desktop {
     tray: Tray,
@@ -14,21 +14,16 @@ struct Desktop {
 impl Global for Desktop {}
 
 pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
-    cx.on_action(open_settings).on_action(quit);
+    // Global actions can run while GPUI temporarily borrows the active window.
+    // Defer handle updates until that dispatch finishes.
+    cx.on_action(|_: &OpenSettings, cx| cx.defer(open_settings))
+        .on_action(|_: &HideSettings, cx| cx.defer(hide_settings))
+        .on_action(|_: &Quit, cx| cx.defer(quit));
     let tray = Tray::builder()
         .icon(icon()?)
         .title("VPN")
         .tooltip("VPN Splitter — prototype, routing unavailable")
-        .menu(|cx| {
-            vec![
-                MenuItem::action("Disconnected — prototype", NoAction).disabled(true),
-                MenuItem::action("Connect VPN (not implemented)", NoAction).disabled(true),
-                MenuItem::separator(),
-                MenuItem::action("Settings…", OpenSettings).checked(!cx.windows().is_empty()),
-                MenuItem::separator(),
-                MenuItem::action("Quit VPN Splitter", Quit),
-            ]
-        })
+        .menu(menu)
         .build(cx)?;
     cx.set_global(Desktop {
         tray: tray.clone(),
@@ -45,14 +40,34 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
     Ok(tray)
 }
 
-fn open_settings(_: &OpenSettings, cx: &mut App) {
+pub fn menu(cx: &mut App) -> Vec<MenuItem> {
+    vec![
+        MenuItem::action("Disconnected — prototype", NoAction).disabled(true),
+        MenuItem::action("Connect VPN (not implemented)", NoAction).disabled(true),
+        MenuItem::separator(),
+        MenuItem::action("Settings…", OpenSettings).checked(settings_visible(cx)),
+        MenuItem::separator(),
+        MenuItem::action("Quit VPN Splitter", Quit),
+    ]
+}
+
+fn open_settings(cx: &mut App) {
     let started = std::time::Instant::now();
     if let Some(handle) = cx.global::<Desktop>().settings
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| {
+                window.on_next_frame(move |_, _| {
+                    eprintln!(
+                        "settings_reveal_frame_ms={:.3}",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                });
+                window.activate_window();
+            })
             .is_ok()
     {
         cx.activate(true);
+        refresh_menu(cx);
         return;
     }
     let bounds = Bounds::centered(None, size(px(460.0), px(260.0)), cx);
@@ -66,6 +81,10 @@ fn open_settings(_: &OpenSettings, cx: &mut App) {
             ..Default::default()
         },
         move |window, cx| {
+            window.on_window_should_close(cx, |_, cx| {
+                cx.defer(hide_settings);
+                false
+            });
             window.on_next_frame(move |_, _| {
                 eprintln!(
                     "settings_frame_ms={:.3}",
@@ -79,12 +98,46 @@ fn open_settings(_: &OpenSettings, cx: &mut App) {
         Ok(handle) => {
             cx.global_mut::<Desktop>().settings = Some(handle);
             cx.activate(true);
+            refresh_menu(cx);
         }
         Err(error) => eprintln!("Cannot open Settings: {error}"),
     }
 }
 
-fn quit(_: &Quit, cx: &mut App) {
+fn hide_settings(cx: &mut App) {
+    if let Some(handle) = cx.global::<Desktop>().settings {
+        match handle.update(cx, |_, window, _| crate::window_visibility::hide(window)) {
+            Ok(Ok(())) => refresh_menu(cx),
+            Ok(Err(error)) => eprintln!("Cannot hide Settings: {error}"),
+            Err(error) => eprintln!("Cannot access Settings: {error}"),
+        }
+    }
+}
+
+pub fn settings_visible(cx: &mut App) -> bool {
+    let Some(handle) = cx.try_global::<Desktop>().and_then(|state| state.settings) else {
+        return false;
+    };
+    match handle.update(cx, |_, window, _| {
+        crate::window_visibility::is_visible(window)
+    }) {
+        Ok(Ok(visible)) => visible,
+        Ok(Err(error)) => {
+            eprintln!("Cannot read Settings visibility: {error}");
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+fn refresh_menu(cx: &mut App) {
+    let tray = cx.global::<Desktop>().tray.clone();
+    if let Err(error) = tray.refresh_menu(cx) {
+        eprintln!("Cannot refresh tray: {error}");
+    }
+}
+
+fn quit(cx: &mut App) {
     let tray = cx.global::<Desktop>().tray.clone();
     if let Err(error) = tray.close(cx) {
         eprintln!("Cannot close tray: {error}");

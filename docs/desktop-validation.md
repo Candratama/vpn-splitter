@@ -1,7 +1,7 @@
 # GPUI desktop prototype validation — 2026-10-16
 
-Status: prototype builds and runs; Task 1 performance gate failed. Tasks 2–10 have
-not started. No VPN control, destination editor, privileged helper, installer, or
+Status: the initial destruction experiment failed; the approved reuse lifecycle
+now passes the measured macOS resource gate. Tasks 2–10 have not started. No VPN control, destination editor, privileged helper, installer, or
 Windows support is claimed by this prototype.
 
 ## Environment and dependencies
@@ -86,22 +86,49 @@ window destruction fails the intended <50 MB idle memory budget. Task 1 is
 incomplete. The spec explicitly requires design review at this gate, so the
 implementation has not expanded into VPN/routing functionality.
 
-## Proposed lifecycle amendment for review
+## Approved reuse lifecycle and remeasurement
 
-Preferred smallest next experiment: keep one GPUI Settings window and hide/reveal
-it instead of destroying/recreating it. This changes the spec's destruction rule.
-It must prove bounded charged footprint below 50 MB after twenty cycles, CPU below
-0.5% over five idle minutes, proper hidden rendering suspension, correct tray
-checked state, keyboard focus, Quit cleanup and independent Windows behavior.
-The initial 31.3 MiB footprint suggests an experiment is reasonable, not that this
-alternative already passes. No change to this behavior has been implemented.
+The user approved one retained Settings window with native hide/reveal on
+2026-10-16. Close is intercepted without destruction. macOS uses NSWindow
+orderOut; Windows has a native ShowWindow adapter which is not yet live-tested.
 
-If reuse cannot meet the budgets, keep the parent as the GPUI tray with no window,
-and run Settings in a temporary child of the same executable. Closing Settings
-exits that child, allowing OS process teardown to reclaim its renderer resources.
-That option adds process/IPC lifecycle work and must remeasure total memory and
-Settings startup. A separate native tray implementation is a further alternative;
-no framework switch has been made.
+A new release probe first failed against removal behavior. It then found a
+re-entrancy issue: global actions can run while GPUI temporarily borrows the active
+window, so updating its handle inside that callback fails. Show/hide/quit now defer
+until dispatch finishes. OS reopen is scheduled through AsyncApp.update so deferred
+effects also flush when no window has been created yet.
+
+The updated probe asserts one stable WindowId, native visible/hidden state, correct
+Settings check state in the emitted menu, disabled unimplemented actions, duplicate
+Open coalescing, and twenty hide/reveal cycles. No mocks or accessibility client are
+needed for these assertions. A separate native UI test used the actual titlebar
+close button twenty times; logs showed one creation and repeated reveals.
+
+After twenty programmatic cycles, over 300.042 hidden idle seconds:
+
+- CPU average: 0.0001% of one core.
+- Peak physical footprint: 30,933,976 bytes (29.5 MiB).
+- Peak RSS: 99,401,728 bytes (94.8 MiB).
+- Same retained window; vmmap corroborates a bounded charged footprint.
+
+After twenty actual titlebar-close/reveal cycles, over 10.043 hidden seconds:
+
+- CPU average: 0.0001% of one core.
+- Peak physical footprint: 34,751,448 bytes (33.1 MiB).
+- Peak RSS: 101,597,184 bytes (96.9 MiB).
+
+These pass the intended idle <50 MB charged-memory and <0.5% CPU gates on this Mac.
+Memory is intentionally retained rather than claimed to be fully released. The
+original destruction results above remain the record of the failed experiment.
+The regression probe now uses reuse by default, holds 330 seconds for measurement,
+and accepts `--hold-seconds 0` for a short assertion-only run. The previous
+60-second/zero-window probe behavior belongs to commit 8db5cfe.
+
+The initial fresh-context review found no additional Important/Critical defect;
+it noted stale check state after OS reopen. The approved lifecycle now derives the
+check state from native visibility and refreshes after show/hide on both entry
+paths. The probe checks the emitted menu state; actual native checkmark pixels
+remain a separate visual criterion. No second reviewer was used for this change.
 
 ## Verification and remaining scope
 

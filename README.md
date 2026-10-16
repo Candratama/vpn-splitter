@@ -73,7 +73,7 @@ the tray alive. The launcher creates an unsigned local bundle at
 `target/release/VPN Splitter Prototype.app`; it installs no privileged service.
 
 The first performance gate found retained memory after repeated window creation.
-Further desktop features await the lifecycle decision described in
-[desktop validation](docs/desktop-validation.md). The architecture and execution
+The approved reuse lifecycle now hides/reveals one Settings window and passes the
+measured macOS gate; see [desktop validation](docs/desktop-validation.md). The architecture and execution
 plan are in [docs/desktop-architecture.md](docs/desktop-architecture.md) and
 [docs/superpowers/plans/2026-10-15-gpui-desktop.md](docs/superpowers/plans/2026-10-15-gpui-desktop.md).

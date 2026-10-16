@@ -25,8 +25,10 @@ one IPC message to 1 MiB. Errors preserve the previous valid configuration.
 Selected: Rust + upstream GPUI for Settings and Diagnostics; native menus through
 `gpui-tray`. No WebView, JavaScript runtime, frontend build, or local HTTP server.
 Keep the GPUI application/event loop alive with zero visible windows. Create
-Settings on demand and release its window on close; verify actual GPU/resource
-release rather than assuming closing a window unloads the renderer.
+Settings on demand and retain one window for hide/reveal on close. This lifecycle
+amendment was approved on 2026-10-16 after destroy/recreate retained IOSurface
+allocations. Verify stable window identity, native visibility, bounded memory and
+suspended rendering while hidden. Release the window at process exit.
 
 Use one pinned compatible GPUI source/revision across the dependency graph.
 `gpui-tray` is a community dependency; its menu-state feature and upstream GPUI
@@ -35,7 +37,7 @@ UI components. Start with GPUI primitives; add a component library only if the
 Settings editor demonstrably needs it.
 
 A first release-mode prototype must prove: tray with no window, Settings open /
-close / reopen, enabled and disabled actions, callbacks on the GPUI foreground
+hide / reveal, enabled and disabled actions, callbacks on the GPUI foreground
 executor, continued operation after the last window closes, explicit quit, and
 macOS/Windows lifecycle compatibility. Perform blocking VPN/IPC/file work off the
 UI executor and marshal state updates back to it.
@@ -154,7 +156,7 @@ inline validation and import/export; launch-at-login option; save/apply status.
 Diagnostics shows connection/interface, route verification, DNS result, and last
 actionable error. Technical detail is available on demand.
 
-Closing Settings leaves the tray running. Quit clears managed routes and
+Closing Settings hides the retained window and leaves the tray running. Quit clears managed routes and
 disconnects a connection started by the app. A VPN that was already connected
 before adoption remains connected; this behavior is stated in the Quit action.
 If cleanup fails, retain the helper and journal and show the failure before exit.
@@ -180,7 +182,7 @@ Repository examples use documentation addresses and example domains only.
 Initial targets, to be measured on named reference machines in release builds:
 
 - Tray available within 1 second on warm launch, excluding admin/setup prompts.
-- Desktop plus idle helper private memory below 50 MB with Settings destroyed;
+- Desktop plus idle helper private memory below 50 MB with Settings hidden;
   total process memory below 150 MB while Settings is open.
 - Average idle CPU below 0.5% of one core over five minutes; no recurring network
   probes or rendering loop while disconnected.

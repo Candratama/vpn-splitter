@@ -1,5 +1,6 @@
 mod single_instance;
 mod tray;
+mod window_visibility;
 
 use gpui::QuitMode;
 use single_instance::SingleInstance;
@@ -14,7 +15,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
     let application = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
-    application.on_reopen(|cx| cx.dispatch_action(&tray::OpenSettings));
+    application.on_reopen(|cx| {
+        cx.spawn(async |cx| {
+            cx.update(|cx| cx.dispatch_action(&tray::OpenSettings));
+        })
+        .detach();
+    });
     application.run(move |cx| {
         #[cfg(target_os = "macos")]
         {
