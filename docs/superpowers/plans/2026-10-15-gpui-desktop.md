@@ -63,7 +63,7 @@ Shared types are introduced by the owning task below. Public operations return `
 - [x] Measure warm startup, Settings opening, idle CPU for five minutes and complete process-tree memory before first Settings creation and after repeated hide/reveal. Targets: tray <1 s, Settings <500 ms, idle private memory <50 MB, open Settings total memory <150 MB, idle CPU <0.5% of one core. Record hardware, OS, metric and result; do not claim GPU resources are released without evidence. A missed budget or unsupported tray lifecycle stops expansion for design review.
 - [x] Commit only workspace/prototype/docs changes: `feat: add GPUI tray lifecycle prototype`.
 
-**2026-10-16 checkpoint:** destroy/recreate failed the idle-memory gate. User approved reuse of one hidden Settings window; Task 1 passed the measured macOS prototype gate with one retained hidden window. Windows runtime checks remain in Tasks 9–10. See `docs/desktop-validation.md`. Task 2 is next.
+**2026-10-16 checkpoint:** destroy/recreate failed the idle-memory gate. User approved reuse of one hidden Settings window; Task 1 passed the measured macOS prototype gate with one retained hidden window. Windows runtime checks remain in Tasks 9–10. See `docs/desktop-validation.md`. Core implementation follows below.
 
 ### Task 2: Define validated local configuration
 
@@ -82,10 +82,10 @@ Shared types are introduced by the owning task below. Public operations return `
 
 **Interfaces:** Produce `ProfileId`, unique `SessionId`, `SessionState::{Disconnected, Connecting, Applying, Active, Disconnecting, CleanupRequired}`, `Session::handle(Event) -> Vec<Effect>`. Events/effects carry session identity; effects request OS/helper work and return completion events. Define `Route { destination, prefix, interface_id, gateway }`, `NetworkSnapshot`, `RoutePlan`, and `build_plan(&Config, &NetworkSnapshot, &[ResolvedHost]) -> Result<RoutePlan, Error>`. Protocol v1 provides `Request::{Begin, Apply, Clear, Status}` and corresponding typed replies; Begin binds peer, session and verified VPN interface.
 
-- [ ] Add failing tests for duplicate Connect, Disconnect during Apply, late Connected/Applied callbacks, 30 s connection timeout, 10 s helper timeout, DNS failure, route-limit expansion, full-tunnel profile, missing profile and conflicting routes. Assert defaults, /1 internet routes and DNS mutations never appear in effects/plans.
-- [ ] Run `cargo test -p vpn-splitter-core`; implement one deterministic state machine driven by events, with an injected monotonic clock for tests. Begin/Apply require a matching live session, interface verification and successful split-mode checks. An old file alone never implies Active.
-- [ ] Add replacement-plan tests: validate/resolve before mutation, rollback to the prior plan after failure if the session is valid, otherwise clear and show CleanupRequired. Preserve whether the VPN was app-started or already connected; only app-started connections receive normal Quit/Disconnect effects.
-- [ ] Run `cargo test -p vpn-splitter-core`; commit: `feat: add serialized VPN session and route planning`.
+- [x] Add failing tests for duplicate Connect, Disconnect during Apply, late Connected/Applied callbacks, 30 s connection timeout, 10 s helper timeout, DNS failure, route-limit expansion, full-tunnel profile, missing profile and conflicting routes. Assert defaults, /1 internet routes and DNS mutations never appear in effects/plans.
+- [x] Run `cargo test -p vpn-splitter-core`; implement one deterministic state machine driven by events, with an injected monotonic clock for tests. Begin/Apply require a matching live session, interface verification and successful split-mode checks. An old file alone never implies Active.
+- [x] Add replacement-plan tests: validate/resolve before mutation, rollback to the prior plan after failure if the session is valid, otherwise clear and show CleanupRequired. Preserve whether the VPN was app-started or already connected; only app-started connections receive normal Quit/Disconnect effects.
+- [x] Run `cargo test -p vpn-splitter-core`; commit: `feat: add serialized VPN session and route planning`.
 
 ## Milestone B — macOS helper and working VPN
 

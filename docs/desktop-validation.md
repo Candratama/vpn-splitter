@@ -160,3 +160,21 @@ sync fails, the error explicitly says a validated replacement may already exist;
 callers must reload before retrying. This verifies process-crash atomicity on the
 current Mac, not power-loss behavior or Windows durability. No UI config editing
 or automatic import of private local infrastructure has been enabled yet.
+
+## Core session and route policy (Task 3)
+
+Pure deterministic tests pass for duplicate Connect, stale session/revision/reply
+callbacks, cancellation during apply, 30-second preparation and 10-second helper
+deadlines, adopted VPN preservation, DNS failure and replacement rollback
+confirmation. Helper sequence numbers are monotonic within a random UUID session.
+A failed cleanup requires explicit retry; no reconnect loop is introduced.
+
+The planner refuses defaults and /1, full-tunnel or unverifiable profiles, changed
+public/endpoint paths, physical connected subnet overlaps, conflicting existing
+routes, invalid destinations and more than 4096 expanded routes. Dual-stack DNS
+answers emit an IPv6 bypass warning; AAAA-only destinations fail. Protocol v1
+uses bounded strict typed JSON (1 MiB); authentication and live interface
+attestation belong to the native helper, not this codec.
+
+These checks do not establish live routing, VPN support, IPC authorization, or
+rollback durability. The desktop prototype still has Connect disabled.
