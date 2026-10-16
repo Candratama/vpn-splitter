@@ -71,10 +71,10 @@ Shared types are introduced by the owning task below. Public operations return `
 
 **Interfaces:** Produce `Config { version: u32, profile_id: Option<String>, destinations: Vec<Destination>, launch_at_login: bool }`, `Destination::{Ipv4, Cidr, Hostname}`, `Config::parse(&str) -> Result<Config, Error>`, `import_rules(&str) -> Result<Vec<Destination>, Error>`, `load_config(&Path) -> Result<Config, Error>` and `save_config(&Path, &Config) -> Result<(), Error>`.
 
-- [ ] Write failing inline tests: invalid IPv4 octets/prefixes, URLs, wildcard, IPv6, unknown schema version, duplicate/case-insensitive hostnames, forbidden /0 and catch-all /1, 4,097 rules, comments/blank lines from config.txt. Assert bad input returns an error and never overwrites the previous file.
-- [ ] Run `cargo test -p vpn-splitter-core config` and confirm failures come from missing policy. Implement version 1 JSON, normalized/deduplicated rules, private OS app-data location selected by the desktop, and atomic replacement in the same directory with platform-correct durability. A missing config gives empty defaults; corrupt config is visible and preserved.
-- [ ] Run `cargo test -p vpn-splitter-core config`; simulate interrupted saves and assert the old or new complete JSON remains. Keep example rules in reserved documentation ranges/example domains. No secrets or machine-specific defaults.
-- [ ] Commit: `feat: add validated local VPN configuration`.
+- [x] Write failing inline tests: invalid IPv4 octets/prefixes, URLs, wildcard, IPv6, unknown schema version, duplicate/case-insensitive hostnames, forbidden /0 and catch-all /1, 4,097 rules, comments/blank lines from config.txt. Assert bad input returns an error and never overwrites the previous file.
+- [x] Run `cargo test -p vpn-splitter-core config` and confirm failures come from missing policy. Implement version 1 JSON, normalized/deduplicated rules, private OS app-data location selected by the desktop, and atomic replacement in the same directory with platform-correct durability. A missing config gives empty defaults; corrupt config is visible and preserved.
+- [x] Run `cargo test -p vpn-splitter-core config`; simulate interrupted saves and assert the old or new complete JSON remains. Keep example rules in reserved documentation ranges/example domains. No secrets or machine-specific defaults.
+- [x] Commit: `feat: add validated local VPN configuration`.
 
 ### Task 3: Define the serialized session and route plan
 

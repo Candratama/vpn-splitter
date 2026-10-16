@@ -1,7 +1,8 @@
 # GPUI desktop prototype validation — 2026-10-16
 
 Status: the initial destruction experiment failed; the approved reuse lifecycle
-now passes the measured macOS resource gate. Tasks 2–10 have not started. No VPN control, destination editor, privileged helper, installer, or
+now passes the measured macOS resource gate. Core config validation/storage is
+implemented and tested; VPN/session/helper integration remains pending. No VPN control, destination editor, privileged helper, installer, or
 Windows support is claimed by this prototype.
 
 ## Environment and dependencies
@@ -144,3 +145,18 @@ remain a separate visual criterion. No second reviewer was used for this change.
 
 Full local logs and reports are kept under this plan's ignored
 `.superpowers/sdd/2026-10-15-gpui-desktop/` workspace for continuation.
+
+## Core config checkpoint
+
+Version-1 JSON accepts normalized IPv4/CIDR and explicit ASCII hostnames. Eight
+config tests pass, including a real child-process kill during staged replacement;
+one ignored child fixture is invoked by that test. Existing bytes survive invalid
+input, corrupt input remains visible, missing config defaults, and Unix output
+permissions are 0600. Config/import input is bounded to 1 MiB; unique rules to 4096.
+
+Staging uses an already-resolved tempfile dependency; file data is synced before
+atomic replacement and the Unix parent directory is synced afterward. If that final
+sync fails, the error explicitly says a validated replacement may already exist;
+callers must reload before retrying. This verifies process-crash atomicity on the
+current Mac, not power-loss behavior or Windows durability. No UI config editing
+or automatic import of private local infrastructure has been enabled yet.
