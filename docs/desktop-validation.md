@@ -1,0 +1,119 @@
+# GPUI desktop prototype validation — 2026-10-16
+
+Status: prototype builds and runs; Task 1 performance gate failed. Tasks 2–10 have
+not started. No VPN control, destination editor, privileged helper, installer, or
+Windows support is claimed by this prototype.
+
+## Environment and dependencies
+
+- Mac14,2, Apple Silicon, 16 GiB RAM; macOS 27.0.1 build 26A434.
+- rustc/cargo 1.97.1; other toolchain versions and macOS 14 runtime unverified.
+- GPUI 0.2.2 and gpui_platform from Zed revision
+  `8166e3d7b8b42d8aaf4d4dee7fcd25ab4ec65105`; gpui-tray 0.1.4.
+- `cargo tree -d` inspected and `cargo tree -i gpui` confirms a single GPUI source.
+- Direct GPUI/platform/tray packages declare Apache-2.0. Preserve applicable
+  licenses/notices and inspect transitive license requirements before distribution.
+- Xcode's optional Metal Toolchain was absent and installed using the official
+  `xcodebuild -downloadComponent MetalToolchain` command (27A266a).
+- Upstream `block` 0.1.6 emits a future Rust compatibility warning. Current
+  compilation succeeds; a future toolchain upgrade requires review.
+
+## Functional checks
+
+- Default launch installs the tray without a Settings window or Dock icon.
+- Native Settings rendering inspected. One window is reused while open; after
+  closing it a newly created window can reopen.
+- Twenty close/reopen cycles exercised through native UI automation. The tool's
+  app activation triggers the OS reopen event, which dispatches the same Settings
+  action. This is not described as twenty tray clicks.
+- The user separately confirmed the native tray menu, Settings, and Quit work.
+  The unavailable VPN menu item is disabled. Checked Settings state is supplied
+  through gpui-tray's native menu-state integration; dedicated native checked-state
+  readback remains unverified.
+- Five external warm launches measured with a parent process stopwatch from
+  process creation to the tray-installed log: 127.266, 118.581, 94.137, 87.211,
+  83.907 ms. This includes process startup but not independent compositor timing.
+- Five duplicate launches exit without taking control. The OS lock is released
+  after each owner exits. The unit test was observed failing before OS locking
+  was implemented, then passing.
+- First Settings frame callback: 275.013 ms; subsequent measured opens approximately
+  24–44 ms. This measures GPUI's frame callback, not compositor presentation.
+- Initial Settings RSS: 92.8 MiB; charged physical footprint: 31.3 MiB.
+- Release executable: 8,807,264 bytes (8.4 MiB), excluding OS libraries/tooling.
+
+## Memory and CPU evidence
+
+Read-only `scripts/measure-macos.py` samples macOS `proc_pid_rusage` v0 for the
+root and descendants every five seconds. `vmmap -summary` cross-checks memory.
+Physical footprint is charged process memory, including relevant GPU/compressed
+allocations; it is not equated to anonymous private RAM. RSS is reported separately.
+The intended idle budget is evaluated conservatively using charged footprint,
+rather than overlooking retained GPU allocations when RSS alone looks smaller.
+
+Before any Settings window, over 300.037 seconds:
+
+- CPU average: 0.0004% of one core.
+- Peak process-tree physical footprint: 12,862,328 bytes (12.3 MiB).
+- Peak process-tree RSS: 53,739,520 bytes (51.3 MiB).
+- No child process or helper was present.
+
+After twenty native close/reopen cycles and final close, over 10.044 seconds:
+
+- CPU average: 0.0001% of one core.
+- Physical footprint: 166,200,376 bytes (158.5 MiB).
+- RSS: 109,789,184 bytes (104.7 MiB).
+- vmmap IOSurface resident allocation grew from about 3.9 MiB with the first
+  Settings window to 85.9 MiB after repeated creation.
+
+To rule out accessibility clients retaining the old windows, an independent
+release-mode probe used the production Settings action and GPUI's window removal
+API, with no accessibility client attached. It asserted exactly one GPUI window
+while open and zero after every close, repeated twenty times:
+
+```sh
+cargo run --release --locked -p vpn-splitter-desktop --example window_lifecycle_probe
+```
+
+The probe leaves sixty seconds to sample its PID, then quits through the production
+Quit action. After all twenty cycles, it reported zero GPUI windows but retained
+144,475,168 bytes (137.8 MiB) physical footprint; CPU averaged 0.0001% over ten
+seconds. The issue reproduces without native accessibility references. The exact
+upstream object retaining the allocations has not been established; no unsafe
+manual Metal/AppKit release or dependency source patch was attempted.
+
+The zero-window tray and initial UI meet their measured targets, but repeated
+window destruction fails the intended <50 MB idle memory budget. Task 1 is
+incomplete. The spec explicitly requires design review at this gate, so the
+implementation has not expanded into VPN/routing functionality.
+
+## Proposed lifecycle amendment for review
+
+Preferred smallest next experiment: keep one GPUI Settings window and hide/reveal
+it instead of destroying/recreating it. This changes the spec's destruction rule.
+It must prove bounded charged footprint below 50 MB after twenty cycles, CPU below
+0.5% over five idle minutes, proper hidden rendering suspension, correct tray
+checked state, keyboard focus, Quit cleanup and independent Windows behavior.
+The initial 31.3 MiB footprint suggests an experiment is reasonable, not that this
+alternative already passes. No change to this behavior has been implemented.
+
+If reuse cannot meet the budgets, keep the parent as the GPUI tray with no window,
+and run Settings in a temporary child of the same executable. Closing Settings
+exits that child, allowing OS process teardown to reclaim its renderer resources.
+That option adds process/IPC lifecycle work and must remeasure total memory and
+Settings startup. A separate native tray implementation is a further alternative;
+no framework switch has been made.
+
+## Verification and remaining scope
+
+- Release build and the single-instance Rust test passed.
+- Release clippy for workspace/all targets passed with warnings denied in app code.
+- `cargo fmt --all -- --check`, shell launcher syntax and `git diff --check` passed.
+- Existing CLI suite: twelve PASS, no live route mutations.
+- Idle/initial-window measurements above are app-only; no helper is implemented.
+- Checked-menu state readback, actual compositor latency, GPU power, minimum
+  macOS version, and all Windows behavior remain unverified.
+- The unsigned bundle is a local development artifact; no service installed,
+  routes changed, credentials imported, or remote publication performed.
+
+Full local logs and reports are kept under this plan's ignored
+`.superpowers/sdd/2026-10-15-gpui-desktop/` workspace for continuation.

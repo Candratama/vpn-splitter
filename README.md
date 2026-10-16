@@ -53,3 +53,27 @@ The tests mock operating system commands and do not change the Mac's routing:
 ```sh
 bash test_vpn_splitter.sh
 ```
+
+## GPUI desktop prototype
+
+The desktop branch currently contains a tray/window lifecycle prototype. Its VPN
+action is disabled: use the CLI above for routing. The prototype does not read
+your routing config, connect VPNs, or change network settings.
+
+On an Apple Silicon Mac with Xcode and Rust 1.97.1:
+
+```sh
+# Required once if Xcode's optional Metal compiler is missing:
+xcodebuild -downloadComponent MetalToolchain
+./scripts/run-macos-prototype.sh
+```
+
+Use the **VPN** menu bar item to open Settings or quit. Closing Settings keeps
+the tray alive. The launcher creates an unsigned local bundle at
+`target/release/VPN Splitter Prototype.app`; it installs no privileged service.
+
+The first performance gate found retained memory after repeated window creation.
+Further desktop features await the lifecycle decision described in
+[desktop validation](docs/desktop-validation.md). The architecture and execution
+plan are in [docs/desktop-architecture.md](docs/desktop-architecture.md) and
+[docs/superpowers/plans/2026-10-15-gpui-desktop.md](docs/superpowers/plans/2026-10-15-gpui-desktop.md).

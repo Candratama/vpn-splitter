@@ -57,11 +57,13 @@ Shared types are introduced by the owning task below. Public operations return `
 
 **Interfaces:** Produce `tray::install(cx: &mut gpui::App) -> Result<Tray, Box<dyn std::error::Error>>`; desktop retains the tray handle for process lifetime. Prototype actions are Open Settings and Quit; unavailable VPN actions stay disabled.
 
-- [ ] Resolve and pin one GPUI revision supported by gpui-tray, including checked/disabled menu state. Verify one GPUI source with `cargo tree -d`; record revision/toolchain and license requirements. Do not add a component library.
-- [ ] Build a zero-window app and a minimal reopenable Settings window. Keep the GPUI application alive after its last window closes. Implement single-instance locking with an OS-held lock, not a stale PID file. Handle menu callbacks on the foreground executor; run blocking work off it.
+- [x] Resolve and pin one GPUI revision supported by gpui-tray, including checked/disabled menu state. Verify one GPUI source with `cargo tree -d`; record revision/toolchain and license requirements. Do not add a component library.
+- [x] Build a zero-window app and a minimal reopenable Settings window. Keep the GPUI application alive after its last window closes. Implement single-instance locking with an OS-held lock, not a stale PID file. Handle menu callbacks on the foreground executor; run blocking work off it.
 - [ ] Run `cargo build --release -p vpn-splitter-desktop`. Live-check tray-only launch, open/close/reopen 20 times, checked/disabled actions, second launch, and Quit. At this stage a second instance exits safely; focus forwarding can be added with Settings.
 - [ ] Measure warm startup, Settings opening, idle CPU for five minutes and complete process-tree memory before/after window closure. Targets: tray <1 s, Settings <500 ms, idle private memory <50 MB, open Settings total memory <150 MB, idle CPU <0.5% of one core. Record hardware, OS, metric and result; do not claim GPU resources are released without evidence. A missed budget or unsupported tray lifecycle stops expansion for design review.
 - [ ] Commit only workspace/prototype/docs changes: `feat: add GPUI tray lifecycle prototype`.
+
+**2026-10-16 checkpoint:** macOS prototype built; repeated window teardown failed the idle-memory gate. See `docs/desktop-validation.md`. Task 1 remains incomplete; Tasks 2–10 are pending design review.
 
 ### Task 2: Define validated local configuration
 
