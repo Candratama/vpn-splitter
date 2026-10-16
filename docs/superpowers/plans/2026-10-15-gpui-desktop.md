@@ -95,10 +95,10 @@ Shared types are introduced by the owning task below. Public operations return `
 
 **Interfaces:** Consume `SessionId`, `RoutePlan`, `Route`. Produce `Journal::open(&Path) -> Result<Journal, Error>`, `apply(&mut Journal, &RoutePlan, &mut impl RouteBackend) -> Result<(), Error>`, `clear(&mut Journal, &mut impl RouteBackend) -> Result<CleanupReport, Error>` and `reconcile(&mut Journal, &mut impl RouteBackend) -> Result<CleanupReport, Error>`. `RouteBackend` is the one OS boundary with read/add/delete methods; production and in-memory fault injection are its implementations. `CleanupReport` distinguishes removed, missing, externally changed and failed routes.
 
-- [ ] Add failing recovery tests for failure after each journal write or OS mutation, pre-existing identical route, conflicting route, externally changed gateway/interface, already missing route, corrupted journal and delete denied. Assert no unowned route is deleted, pending work is reconciled, and failed cleanup remains durable.
-- [ ] Run `cargo test -p vpn-splitter-helper --test recovery`. Implement intent-before-mutation, durable completion records, exact current-route matching, serialized apply/clear and idempotent reconciliation. Journals live in helper-owned protected storage; reject unsafe paths/symlinks and do not trust caller paths.
-- [ ] Repeat the recovery tests with journal reload between fault and recovery; require either the known previous plan or an explicit unresolved cleanup record. A corrupted journal blocks new mutations and exposes recovery diagnostics instead of guessing ownership.
-- [ ] Commit: `feat: add recoverable owned-route transactions`.
+- [x] Add failing recovery tests for failure after each journal write or OS mutation, pre-existing identical route, conflicting route, externally changed gateway/interface, already missing route, corrupted journal and delete denied. Assert no unowned route is deleted, pending work is reconciled, and failed cleanup remains durable.
+- [x] Run `cargo test -p vpn-splitter-helper --test recovery`. Implement intent-before-mutation, durable completion records, exact current-route matching, serialized apply/clear and idempotent reconciliation. Journals live in helper-owned protected storage; reject unsafe paths/symlinks and do not trust caller paths.
+- [x] Repeat the recovery tests with journal reload between fault and recovery; require either the known previous plan or an explicit unresolved cleanup record. A corrupted journal blocks new mutations and exposes recovery diagnostics instead of guessing ownership.
+- [x] Commit: `feat: add recoverable owned-route transactions`.
 
 ### Task 5: Add macOS helper permissions, IPC and native route operations
 

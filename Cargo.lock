@@ -5374,6 +5374,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpn-splitter-helper"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "vpn-splitter-core",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

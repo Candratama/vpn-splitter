@@ -178,3 +178,28 @@ attestation belong to the native helper, not this codec.
 
 These checks do not establish live routing, VPN support, IPC authorization, or
 rollback durability. The desktop prototype still has Connect disabled.
+
+## Owned-route journal (Task 4)
+
+Ten integration tests plus a write-fault matrix pass with an in-memory route
+backend and private temporary files. The matrix reloads the journal after each
+of three apply/clear writes, both a simulated crash after durable write and a
+failed write before replacement. Separate faults interrupt the backend after
+add/delete. This is process-level fault injection, not a power-loss or native
+route test. The helper binary exits unsupported until its service exists.
+
+The journal uses an OS-held lock, strict bounded JSON, same-directory atomic
+replacement and file/directory synchronization on Unix. Unix storage requires
+a private owner-only parent, regular single-link files owned by the effective
+UID, and no final-component symlinks. The privileged installer must establish
+the trusted parent and fixed path; caller-selected paths are not an IPC feature.
+Windows ACL and metadata durability qualification remain unverified.
+
+Pre-existing identical routes are never owned; foreign or changed routes are
+never replaced/deleted. Known replacement failures attempt restoration of the
+previous plan. Uncertain or failed work remains durable and blocks new apply.
+A crash between add and durable ownership confirmation is intentionally not
+automatically resolved when an identical route is present: external creation
+is indistinguishable without a native ownership token. The route and journal
+are retained for explicit administrator reconciliation. A committed plan alone
+is not proof of live routing; native readback/authorization are still required.
