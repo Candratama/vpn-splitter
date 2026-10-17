@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -186,4 +187,49 @@ int vs_vpn_control(const char *profile,int connect) { @autoreleasepool {
     }
     SCNetworkConnectionRef connection=SCNetworkConnectionCreateWithServiceID(NULL,(__bridge CFStringRef)@(profile),NULL,NULL);if(!connection)return ENOENT;
     Boolean success=connect?SCNetworkConnectionStart(connection,NULL,TRUE):SCNetworkConnectionStop(connection,TRUE);CFRelease(connection);return success?0:EACCES;
+}}
+
+typedef void (*VSNetworkCallback)(void *,uint32_t);
+@interface VSSubscription:NSObject
+@property SCNetworkConnectionRef connection;
+@property SCDynamicStoreRef store;
+@property dispatch_queue_t queue;
+@property VSNetworkCallback callback;
+@property void *context;
+@property BOOL stopped;
+@property id wake_observer;
+@end
+static void vpn_event(SCNetworkConnectionRef connection,SCNetworkConnectionStatus status,void *context) {
+    (void)connection;VSSubscription *subscription=(__bridge VSSubscription*)context;
+    if(!subscription.stopped && (status==kSCNetworkConnectionConnected || status==kSCNetworkConnectionDisconnected))subscription.callback(subscription.context,status==kSCNetworkConnectionConnected?1:2);
+}
+static void desktop_network_event(SCDynamicStoreRef store,CFArrayRef changed,void *context) {
+    (void)store;(void)changed;VSSubscription *subscription=(__bridge VSSubscription*)context;
+    if(!subscription.stopped)subscription.callback(subscription.context,3);
+}
+@implementation VSSubscription
+@end
+void *vs_subscribe(const char *profile,VSNetworkCallback callback,void *context) { @autoreleasepool {
+    VSSubscription *subscription=[VSSubscription new];subscription.callback=callback;subscription.context=context;subscription.queue=dispatch_queue_create("com.candratama.vpnsplitter.events",DISPATCH_QUEUE_SERIAL);
+    SCNetworkConnectionContext connection_context={0,(__bridge void*)subscription,NULL,NULL,NULL};
+    subscription.connection=SCNetworkConnectionCreateWithServiceID(NULL,(__bridge CFStringRef)@(profile),vpn_event,&connection_context);
+    SCDynamicStoreContext store_context={0,(__bridge void*)subscription,NULL,NULL,NULL};
+    subscription.store=SCDynamicStoreCreate(NULL,CFSTR("VPN Splitter desktop"),desktop_network_event,&store_context);
+    NSArray *keys=@[@"State:/Network/Global/IPv4",@"State:/Users/ConsoleUser"];
+    if(!subscription.connection || !subscription.store || !SCDynamicStoreSetNotificationKeys(subscription.store,(__bridge CFArrayRef)keys,NULL) || !SCDynamicStoreSetDispatchQueue(subscription.store,subscription.queue) || !SCNetworkConnectionSetDispatchQueue(subscription.connection,subscription.queue)) {
+        if(subscription.connection){SCNetworkConnectionSetDispatchQueue(subscription.connection,NULL);CFRelease(subscription.connection);}
+        if(subscription.store){SCDynamicStoreSetDispatchQueue(subscription.store,NULL);CFRelease(subscription.store);}
+        return NULL;
+    }
+    subscription.wake_observer=[NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification *notification){
+        (void)notification;dispatch_async(subscription.queue,^{if(!subscription.stopped)subscription.callback(subscription.context,3);});
+    }];
+    return (__bridge_retained void*)subscription;
+}}
+void vs_unsubscribe(void *pointer) { @autoreleasepool {
+    if(!pointer)return;VSSubscription *subscription=CFBridgingRelease(pointer);subscription.stopped=YES;
+    if(subscription.wake_observer)[NSWorkspace.sharedWorkspace.notificationCenter removeObserver:subscription.wake_observer];subscription.wake_observer=nil;
+    SCNetworkConnectionSetDispatchQueue(subscription.connection,NULL);SCDynamicStoreSetDispatchQueue(subscription.store,NULL);
+    dispatch_sync(subscription.queue,^{});
+    CFRelease(subscription.connection);CFRelease(subscription.store);
 }}

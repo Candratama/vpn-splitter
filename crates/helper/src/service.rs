@@ -36,6 +36,7 @@ struct Binding {
     vpn: NetworkInterface,
     sequence: u64,
     open: bool,
+    connected: bool,
 }
 pub struct Service<B> {
     journal: Journal,
@@ -144,13 +145,42 @@ impl<B: RouteBackend> Service<B> {
                 vpn: *vpn_interface,
                 sequence: 1,
                 open: true,
+                connected: true,
             });
             return Ok(Reply {
                 header,
                 result: ReplyResult::Begun,
             });
         }
+        if self.binding.is_none()
+            && matches!(request, Request::Clear { .. })
+            && !self.journal.has_pending()
+        {
+            return Ok(Reply {
+                header,
+                result: ReplyResult::Cleared,
+            });
+        }
+        if self.binding.is_none() && matches!(request, Request::Status { .. }) {
+            return Ok(Reply {
+                header,
+                result: ReplyResult::Status {
+                    active: false,
+                    cleanup_required: self.journal.requires_reconciliation(),
+                },
+            });
+        }
         let binding = self.binding.as_mut().ok_or(Error::Permission)?;
+        if !binding.connected
+            && binding.peer.uid == peer.uid
+            && binding.peer.verified_requirement == peer.verified_requirement
+            && binding.session == header.session
+            && matches!(request, Request::Clear { .. } | Request::Status { .. })
+        {
+            binding.peer = peer.clone();
+            binding.connected = true;
+        }
+
         if &binding.peer != peer
             || binding.session != header.session
             || binding.sequence.checked_add(1) != Some(header.sequence)
@@ -234,6 +264,7 @@ impl<B: RouteBackend> Service<B> {
         {
             return Ok(());
         }
+        self.binding.as_mut().unwrap().connected = false;
         if !crate::journal::clear(&mut self.journal, &mut self.backend)?.complete() {
             return Err(Error::Cleanup);
         }
@@ -496,6 +527,35 @@ mod tests {
             );
             assert_eq!(service.backend.mutations, 0);
         }
+    }
+
+    #[test]
+    fn clear_after_connection_loss_is_idempotent_when_recovery_already_finished() {
+        let (_dir, mut service) = service();
+        let id = SessionId::new();
+        service
+            .request(&peer(), &request(1, id).encode().unwrap(), &mut snapshot)
+            .unwrap();
+        service.invalidated(1).unwrap();
+        let new_peer = PeerIdentity {
+            connection: 2,
+            ..peer()
+        };
+        let clear = Request::Clear {
+            header: Header {
+                version: 1,
+                session: id,
+                sequence: 2,
+            },
+        };
+        assert!(matches!(
+            service
+                .request(&new_peer, &clear.encode().unwrap(), &mut snapshot)
+                .unwrap()
+                .result,
+            ReplyResult::Cleared
+        ));
+        assert_eq!(service.backend.mutations, 0);
     }
 
     #[test]

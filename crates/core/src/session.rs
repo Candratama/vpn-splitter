@@ -186,6 +186,9 @@ impl Session {
     pub fn id(&self) -> Option<SessionId> {
         self.context.as_ref().map(|c| c.id)
     }
+    pub fn deadline_ms(&self) -> Option<u64> {
+        self.deadline
+    }
     pub fn active_plan(&self) -> Option<&RoutePlan> {
         self.context.as_ref().and_then(|c| c.current.as_ref())
     }

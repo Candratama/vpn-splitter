@@ -1,3 +1,5 @@
+mod controller;
+mod platform;
 mod single_instance;
 mod tray;
 mod window_visibility;

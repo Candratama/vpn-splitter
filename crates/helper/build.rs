@@ -12,6 +12,8 @@ fn main() {
             "SystemConfiguration",
             "Security",
             "ServiceManagement",
+            "AppKit",
+            "IOKit",
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }

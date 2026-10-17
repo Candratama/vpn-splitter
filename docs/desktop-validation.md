@@ -242,3 +242,26 @@ The saved PPP VPN endpoint must currently be a literal IPv4 address. This
 limitation prevents ambiguous protection of a DNS name's changing server set.
 Journals record the macOS boot UUID; present matching routes from a prior boot
 become uncertain rather than being claimed as still owned.
+
+## macOS controller implementation checkpoint (Task6)
+
+The tray now owns the session controller independently of Settings. OS operations,
+helper requests and DNS run on separate serial background workers. DNS work has
+a bounded latest-pending queue; results carry session and revision identities.
+Disconnected state blocks on its command queue, unsubscribes native events and
+closes helper IPC; connecting/helper deadlines use one-shot waits. Five-minute
+DNS refresh runs only while Active. No automatic reconnect is implemented.
+
+Native SystemConfiguration notifications report connection status, primary
+network changes and console changes. Desktop wake uses NSWorkspace; the helper
+uses a session-only IOKit power subscription. Quit clears routes before stopping
+an app-started VPN; adopted VPNs remain connected. Cleanup errors keep a usable
+tray with Retry cleanup. Configuration replacements resolve before saving or
+mutating; failure attempts restoration of the previous config and route plan.
+
+Read-only native enumeration/subscription, localhost resolver, deleted-profile
+refusal, stable profile identity, native-event mapping, invalid-save preservation
+and disconnected Quit tests passed. Existing core tests cover late callbacks,
+cancel/timeout, adoption and route replacement. No signed privileged helper,
+Moratel connection, public/internal traffic, cable switch or real sleep/wake was
+exercised. These remain explicit release qualification blockers.

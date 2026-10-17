@@ -138,6 +138,14 @@ impl RouteBackend for MacRouteBackend {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn native_subscription_can_attach_and_drop_without_connecting() {
+        let profiles = super::list_profiles().unwrap();
+        if let Some(profile) = profiles.iter().find(|p| p.supported) {
+            let subscription = super::Subscription::new(&profile.id, |_| {}).unwrap();
+            drop(subscription);
+        }
+    }
+    #[test]
     fn unprivileged_helper_start_is_denied_before_storage_or_routes() {
         if unsafe { libc::geteuid() } != 0 {
             assert!(matches!(
@@ -352,4 +360,66 @@ pub fn serve() -> Result<(), Error> {
             invalidated,
         )
     })
+}
+
+struct NetworkCallback {
+    callback: Box<dyn Fn(u32) + Send + Sync>,
+}
+pub struct Subscription {
+    native: std::ptr::NonNull<std::ffi::c_void>,
+    _callback: Box<NetworkCallback>,
+}
+// Drop drains the serial native queue before releasing callback storage.
+unsafe impl Send for Subscription {}
+unsafe extern "C" {
+    fn vs_subscribe(
+        profile: *const std::ffi::c_char,
+        callback: unsafe extern "C" fn(*mut std::ffi::c_void, u32),
+        context: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn vs_unsubscribe(pointer: *mut std::ffi::c_void);
+}
+unsafe extern "C" fn native_network_event(context: *mut std::ffi::c_void, kind: u32) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let callback = unsafe { &*context.cast::<NetworkCallback>() };
+        (callback.callback)(kind);
+    }));
+}
+impl Subscription {
+    pub fn new(
+        profile: &ProfileId,
+        callback: impl Fn(u32) + Send + Sync + 'static,
+    ) -> Result<Self, Error> {
+        let profile = CString::new(profile.as_str())
+            .map_err(|_| Error::InvalidInput("Invalid profile".into()))?;
+        let mut callback = Box::new(NetworkCallback {
+            callback: Box::new(callback),
+        });
+        let native = std::ptr::NonNull::new(unsafe {
+            vs_subscribe(
+                profile.as_ptr(),
+                native_network_event,
+                (&mut *callback as *mut NetworkCallback).cast(),
+            )
+        })
+        .ok_or(Error::Transport)?;
+        Ok(Self {
+            native,
+            _callback: callback,
+        })
+    }
+}
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        unsafe {
+            vs_unsubscribe(self.native.as_ptr());
+        }
+    }
+}
+
+pub fn helper_status() -> i32 {
+    unsafe extern "C" {
+        fn vs_helper_status() -> i32;
+    }
+    unsafe { vs_helper_status() }
 }

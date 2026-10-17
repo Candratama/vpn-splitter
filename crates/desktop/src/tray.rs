@@ -4,11 +4,26 @@ use gpui::{
 };
 use gpui_tray::{Icon, Tray};
 
-actions!(vpn_splitter, [OpenSettings, HideSettings, Quit]);
+actions!(
+    vpn_splitter,
+    [
+        OpenSettings,
+        HideSettings,
+        Connect,
+        Disconnect,
+        Refresh,
+        RetryCleanup,
+        InstallHelper,
+        ReloadProfiles,
+        Quit
+    ]
+);
 
 struct Desktop {
     tray: Tray,
     settings: Option<WindowHandle<PrototypeSettings>>,
+    view: crate::controller::View,
+    commands: std::sync::mpsc::Sender<crate::controller::Command>,
 }
 
 impl Global for Desktop {}
@@ -18,17 +33,48 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
     // Defer handle updates until that dispatch finishes.
     cx.on_action(|_: &OpenSettings, cx| cx.defer(open_settings))
         .on_action(|_: &HideSettings, cx| cx.defer(hide_settings))
+        .on_action(|_: &Connect, cx| cx.defer(|cx| send(cx, crate::controller::Command::Connect)))
+        .on_action(|_: &Disconnect, cx| {
+            cx.defer(|cx| send(cx, crate::controller::Command::Disconnect))
+        })
+        .on_action(|_: &Refresh, cx| cx.defer(|cx| send(cx, crate::controller::Command::Refresh)))
+        .on_action(|_: &RetryCleanup, cx| {
+            cx.defer(|cx| send(cx, crate::controller::Command::RetryCleanup))
+        })
+        .on_action(|_: &InstallHelper, cx| {
+            cx.defer(|cx| send(cx, crate::controller::Command::InstallHelper))
+        })
+        .on_action(|_: &ReloadProfiles, cx| {
+            cx.defer(|cx| send(cx, crate::controller::Command::ReloadProfiles))
+        })
         .on_action(|_: &Quit, cx| cx.defer(quit));
     let tray = Tray::builder()
         .icon(icon()?)
         .title("VPN")
-        .tooltip("VPN Splitter — prototype, routing unavailable")
+        .tooltip("VPN Splitter")
         .menu(menu)
         .build(cx)?;
+    let (commands, updates) = crate::controller::start(crate::application_directory()?);
     cx.set_global(Desktop {
         tray: tray.clone(),
         settings: None,
+        view: crate::controller::View::default(),
+        commands,
     });
+    cx.spawn(async move |cx| {
+        while let Ok(view) = updates.recv().await {
+            cx.update(|cx| {
+                let quit_ready = view.quit_ready;
+                cx.global_mut::<Desktop>().view = view;
+                refresh_menu(cx);
+                cx.refresh_windows();
+                if quit_ready {
+                    finish_quit(cx);
+                }
+            });
+        }
+    })
+    .detach();
     cx.on_window_closed(|cx, _| {
         cx.global_mut::<Desktop>().settings = None;
         let tray = cx.global::<Desktop>().tray.clone();
@@ -40,15 +86,72 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
     Ok(tray)
 }
 
+pub fn view(cx: &App) -> &crate::controller::View {
+    &cx.global::<Desktop>().view
+}
+pub fn send(cx: &mut App, command: crate::controller::Command) {
+    if cx.global::<Desktop>().commands.send(command).is_err() {
+        cx.global_mut::<Desktop>().view.error =
+            Some(vpn_splitter_core::protocol::FaultCode::Transport);
+    }
+    refresh_menu(cx);
+}
 pub fn menu(cx: &mut App) -> Vec<MenuItem> {
-    vec![
-        MenuItem::action("Disconnected — prototype", NoAction).disabled(true),
-        MenuItem::action("Connect VPN (not implemented)", NoAction).disabled(true),
-        MenuItem::separator(),
-        MenuItem::action("Settings…", OpenSettings).checked(settings_visible(cx)),
-        MenuItem::separator(),
-        MenuItem::action("Quit VPN Splitter", Quit),
-    ]
+    use vpn_splitter_core::session::SessionState;
+    let view = view(cx);
+    let disconnected = view.state == SessionState::Disconnected;
+    let status = if view.preparing {
+        "Preparing VPN…"
+    } else {
+        match view.state {
+            SessionState::Disconnected => "Disconnected",
+            SessionState::Connecting => "Connecting…",
+            SessionState::Applying => "VPN connected — applying routes…",
+            SessionState::Active => "VPN connected — routing active",
+            SessionState::Disconnecting => "Clearing routes / disconnecting…",
+            SessionState::CleanupRequired => "Cleanup required",
+        }
+    };
+    let mut items = vec![MenuItem::action(status, NoAction).disabled(true)];
+    if disconnected {
+        items.push(
+            MenuItem::action("Connect VPN", Connect)
+                .disabled(view.preparing || view.config.profile_id.is_none()),
+        );
+    } else {
+        items.push(MenuItem::action(
+            if view.adopted {
+                "Clear routes (keep VPN connected)"
+            } else {
+                "Disconnect VPN"
+            },
+            Disconnect,
+        ));
+    }
+    items.push(
+        MenuItem::action("Refresh routes", Refresh).disabled(view.state != SessionState::Active),
+    );
+    items.push(
+        MenuItem::action("Retry cleanup", RetryCleanup)
+            .disabled(view.state != SessionState::CleanupRequired),
+    );
+    let adopted = view.adopted;
+    items.push(MenuItem::separator());
+    items
+        .push(MenuItem::action("Profiles / Settings…", OpenSettings).checked(settings_visible(cx)));
+    items.push(MenuItem::action("Reload VPN profiles", ReloadProfiles));
+    items
+        .push(MenuItem::action("Install / approve helper…", InstallHelper).disabled(!disconnected));
+    items.push(MenuItem::separator());
+    items.push(MenuItem::action(
+        if adopted && !disconnected {
+            "Quit (keep VPN connected)"
+        } else {
+            "Quit VPN Splitter"
+        },
+        Quit,
+    ));
+    items
 }
 
 fn open_settings(cx: &mut App) {
@@ -138,6 +241,9 @@ fn refresh_menu(cx: &mut App) {
 }
 
 fn quit(cx: &mut App) {
+    send(cx, crate::controller::Command::Quit);
+}
+fn finish_quit(cx: &mut App) {
     let tray = cx.global::<Desktop>().tray.clone();
     if let Err(error) = tray.close(cx) {
         eprintln!("Cannot close tray: {error}");
@@ -148,7 +254,7 @@ fn quit(cx: &mut App) {
 struct PrototypeSettings;
 
 impl Render for PrototypeSettings {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .bg(rgb(0xf5f5f3))
@@ -158,8 +264,8 @@ impl Render for PrototypeSettings {
             .flex_col()
             .gap_4()
             .child(div().text_xl().child("VPN Splitter"))
-            .child("Desktop prototype")
-            .child("VPN connections and routing are not enabled yet.")
+            .child(format!("VPN: {:?}",view(cx).state))
+            .child(view(cx).error.map(crate::controller::message).unwrap_or("Select a profile and import destinations in Settings (editor integration follows)."))
             .child("Close this window to keep the app in the menu bar. Use the tray menu to quit.")
     }
 }

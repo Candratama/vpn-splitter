@@ -5,6 +5,15 @@ mod tray;
 #[path = "../src/window_visibility.rs"]
 mod window_visibility;
 
+#[path = "../src/controller.rs"]
+mod controller;
+#[path = "../src/platform/mod.rs"]
+mod platform;
+fn application_directory() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let path = std::env::temp_dir().join(format!("vpn-splitter-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
+}
 use gpui::{App, MenuItem, NoAction, QuitMode};
 use std::time::Duration;
 

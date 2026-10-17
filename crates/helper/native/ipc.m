@@ -5,6 +5,8 @@
 #include <stdatomic.h>
 #include <errno.h>
 #include <unistd.h>
+#import <IOKit/pwr_mgt/IOPMLib.h>
+#import <IOKit/IOMessage.h>
 #include "native.h"
 #define VS_LIMIT 1048576
 #define VS_SERVICE @"com.candratama.vpnsplitter.helper"
@@ -80,12 +82,31 @@ int vs_code_requirement(uint8_t *out,size_t capacity,size_t *length) { @autorele
 static SCDynamicStoreRef monitoring_store=NULL;
 static dispatch_queue_t monitoring_queue;
 static BOOL monitoring_active=NO;
+static IONotificationPortRef power_port=NULL;
+static io_connect_t power_root=0;
+static io_object_t power_notifier=0;
+static CFRunLoopRef service_run_loop=NULL;
+static VSListener *service_listener;
+static void network_changed(SCDynamicStoreRef,CFArrayRef,void *);
+static void power_event(void *context,io_service_t service,natural_t message,void *argument) {
+    (void)service;
+    if(message==kIOMessageSystemWillSleep || message==kIOMessageCanSystemSleep)IOAllowPowerChange(power_root,(long)argument);
+    if(message==kIOMessageSystemHasPoweredOn)network_changed(NULL,NULL,context);
+}
+
 int vs_monitor(int active) {
     if(!monitoring_store)return EIO;
     if(monitoring_active==(active!=0))return 0;
-    if(!active){SCDynamicStoreSetDispatchQueue(monitoring_store,NULL);SCDynamicStoreSetNotificationKeys(monitoring_store,NULL,NULL);monitoring_active=NO;return 0;}
+    if(!active){
+        SCDynamicStoreSetDispatchQueue(monitoring_store,NULL);SCDynamicStoreSetNotificationKeys(monitoring_store,NULL,NULL);
+        if(power_root){CFRunLoopRemoveSource(service_run_loop,IONotificationPortGetRunLoopSource(power_port),kCFRunLoopDefaultMode);IODeregisterForSystemPower(&power_notifier);IOServiceClose(power_root);IONotificationPortDestroy(power_port);power_root=0;power_port=NULL;}
+        monitoring_active=NO;return 0;
+    }
     NSArray *patterns=@[@"State:/Network/Global/IPv4",@"State:/Network/Service/.*/IPv4",@"State:/Network/Service/.*/PPP",@"State:/Users/ConsoleUser"];
     if(!SCDynamicStoreSetNotificationKeys(monitoring_store,NULL,(__bridge CFArrayRef)patterns) || !SCDynamicStoreSetDispatchQueue(monitoring_store,monitoring_queue))return EIO;
+    power_root=IORegisterForSystemPower((__bridge void*)service_listener,&power_port,power_event,&power_notifier);
+    if(!power_root){SCDynamicStoreSetDispatchQueue(monitoring_store,NULL);return EIO;}
+    CFRunLoopAddSource(service_run_loop,IONotificationPortGetRunLoopSource(power_port),kCFRunLoopDefaultMode);
     monitoring_active=YES;return 0;
 }
 static void network_changed(SCDynamicStoreRef store,CFArrayRef keys,void *context) {
@@ -100,7 +121,7 @@ int vs_serve(void *context,VSRequest request,VSInvalidated invalidated) { @autor
     SCDynamicStoreContext observer_context={0,(__bridge void*)delegate,NULL,NULL,NULL};
     SCDynamicStoreRef store=SCDynamicStoreCreate(NULL,CFSTR("VPN Splitter helper"),network_changed,&observer_context);
     if(!store)return EIO;
-    monitoring_store=store;monitoring_queue=delegate.queue;
+    monitoring_store=store;monitoring_queue=delegate.queue;service_run_loop=CFRunLoopGetCurrent();service_listener=delegate;
     [listener activate];[[NSRunLoop currentRunLoop]run];
     [listener invalidate];SCDynamicStoreSetDispatchQueue(store,NULL);monitoring_store=NULL;CFRelease(store);return 0;
 }}
@@ -170,4 +191,8 @@ int vs_xpc_probe(void) { @autoreleasepool {
         if(!valid && (error==0 || delegate.probe.calls!=0))return 7;
     }
     return 0;
+}}
+int vs_helper_status(void) { @autoreleasepool {
+    if(!self_requirement(VS_SERVICE))return -1;
+    return (int)[SMAppService daemonServiceWithPlistName:@"com.candratama.vpnsplitter.helper.plist"].status;
 }}
