@@ -50,6 +50,7 @@ struct Data {
     version: u8,
     session: Option<SessionId>,
     committed: Option<RoutePlan>,
+    incomplete: bool,
     entries: Vec<Entry>,
 }
 pub struct Journal {
@@ -208,6 +209,9 @@ impl Journal {
     pub fn has_pending(&self) -> bool {
         self.poisoned || !self.data.entries.is_empty()
     }
+    pub fn requires_reconciliation(&self) -> bool {
+        self.poisoned || self.data.incomplete || uncertain(self)
+    }
     pub fn committed_plan(&self) -> Option<&RoutePlan> {
         self.data.committed.as_ref()
     }
@@ -256,7 +260,7 @@ pub fn apply(
 ) -> Result<(), Error> {
     journal.ready()?;
     plan.validate()?;
-    if journal.data.session.is_none() || uncertain(journal) {
+    if journal.data.session.is_none() || journal.requires_reconciliation() {
         return Err(Error::Cleanup);
     }
     if journal.data.committed.as_ref().is_some_and(|old| {
@@ -274,9 +278,12 @@ pub fn apply(
         }
     }
     let old = journal.data.committed.clone();
+    journal.data.incomplete = true;
+    journal.save()?;
     match replace(journal, plan, backend) {
         Ok(()) => {
             journal.data.committed = Some(plan.clone());
+            journal.data.incomplete = false;
             journal.save()
         }
         Err(error) => {
@@ -291,6 +298,7 @@ pub fn apply(
                 return Err(Error::Cleanup);
             }
             journal.data.committed = old;
+            journal.data.incomplete = false;
             journal.save()?;
             Err(error)
         }
@@ -357,6 +365,10 @@ pub fn clear(
     backend: &mut impl RouteBackend,
 ) -> Result<CleanupReport, Error> {
     journal.ready()?;
+    if !journal.data.entries.is_empty() && !journal.data.incomplete {
+        journal.data.incomplete = true;
+        journal.save()?;
+    }
     let mut report = CleanupReport::default();
     let mut index = 0;
     while index < journal.data.entries.len() {
@@ -393,6 +405,7 @@ pub fn clear(
     if report.complete() {
         journal.data.session = None;
         journal.data.committed = None;
+        journal.data.incomplete = false;
         journal.save()?;
     }
     Ok(report)
@@ -444,7 +457,7 @@ mod tests {
     fn reload_after_every_durable_write_or_write_failure() {
         for clearing in [false, true] {
             for crash in [false, true] {
-                for point in 0..3 {
+                for point in 0..4 {
                     let dir = tempfile::tempdir().unwrap();
                     #[cfg(unix)]
                     {
@@ -482,6 +495,12 @@ mod tests {
                     }
                     drop(j);
                     let mut j = Journal::open(&path).unwrap();
+                    if !clearing && crash && point < 3 {
+                        assert!(
+                            j.requires_reconciliation(),
+                            "unfinished replacement must not claim prior plan restored"
+                        );
+                    }
                     let report = reconcile(&mut j, &mut b).unwrap();
                     if report.complete() {
                         assert!(b.0.is_none());

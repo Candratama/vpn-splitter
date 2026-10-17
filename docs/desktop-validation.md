@@ -183,7 +183,7 @@ rollback durability. The desktop prototype still has Connect disabled.
 
 Ten integration tests plus a write-fault matrix pass with an in-memory route
 backend and private temporary files. The matrix reloads the journal after each
-of three apply/clear writes, both a simulated crash after durable write and a
+of four apply/clear writes, both a simulated crash after durable write and a
 failed write before replacement. Separate faults interrupt the backend after
 add/delete. This is process-level fault injection, not a power-loss or native
 route test. The helper binary exits unsupported until its service exists.
@@ -203,3 +203,20 @@ automatically resolved when an identical route is present: external creation
 is indistinguishable without a native ownership token. The route and journal
 are retained for explicit administrator reconciliation. A committed plan alone
 is not proof of live routing; native readback/authorization are still required.
+
+## Helper request policy (Task 5, incomplete)
+
+Pure tests exercise a trusted native peer identity supplied outside JSON, console
+UID/code-requirement checks, one bound connection/session, monotonic sequences,
+replay rejection, interface substitution, split-mode/path re-attestation on every
+Apply, malformed frames and bound-connection invalidation cleanup. A durable
+incomplete marker prevents partial replacements from claiming restored status.
+These are policy tests with simulated native identity/snapshots, not proof of
+authenticated XPC or live route safety. The helper executable still exits
+unsupported. Native transport, profile attestation, route adapter, registration
+and controlled integration tests remain incomplete. No signing identity was
+available when checked; no privileged service or live route was changed.
+
+Policy checkpoint verification: release workspace suite 44 active tests passed
+(plus the ignored child fixture exercised by its parent); Clippy all targets
+with warnings denied and formatting pass. Native helper Task5 remains incomplete.
