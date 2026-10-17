@@ -48,6 +48,7 @@ struct Entry {
 #[serde(deny_unknown_fields)]
 struct Data {
     version: u8,
+    boot_id: String,
     session: Option<SessionId>,
     committed: Option<RoutePlan>,
     incomplete: bool,
@@ -88,6 +89,37 @@ fn private_file(path: &Path, create: bool) -> Result<File, Error> {
     }
     Ok(file)
 }
+fn boot_id() -> Result<String, Error> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut bytes = [0u8; 128];
+        let mut length = bytes.len();
+        if unsafe {
+            libc::sysctlbyname(
+                c"kern.bootsessionuuid".as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                &mut length,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+            || length > bytes.len()
+        {
+            return Err(Error::Cleanup);
+        }
+        let value = std::str::from_utf8(&bytes[..length])
+            .map_err(|_| Error::Cleanup)?
+            .trim_end_matches('\0');
+        if value.is_empty() {
+            return Err(Error::Cleanup);
+        }
+        Ok(value.to_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(Error::UnsupportedProfile)
+    }
+}
 impl Journal {
     /// Caller selects a fixed helper-owned path, never a path from IPC.
     /// The parent must already be private and protected by the platform installer.
@@ -109,7 +141,8 @@ impl Journal {
             .join(path.file_name().ok_or(Error::Permission)?);
         let lock = private_file(&path.with_extension("lock"), true)?;
         lock.try_lock().map_err(|_| Error::Conflict)?;
-        let data = match private_file(&path, false) {
+        let boot_id = boot_id()?;
+        let mut data = match private_file(&path, false) {
             Ok(file) => {
                 let mut bytes = vec![];
                 file.take((MAX_CONFIG_BYTES + 1) as u64)
@@ -118,7 +151,7 @@ impl Journal {
                     return Err(Error::Cleanup);
                 }
                 let data: Data = serde_json::from_slice(&bytes).map_err(|_| Error::Cleanup)?;
-                if data.version != 1
+                if data.version != 2
                     || data.entries.len() > 8192
                     || data.session.is_some_and(|id| id.is_nil())
                     || (!data.entries.is_empty() && data.session.is_none())
@@ -138,12 +171,22 @@ impl Journal {
                 data
             }
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Data {
-                version: 1,
+                version: 2,
+                boot_id: boot_id.clone(),
                 ..Data::default()
             },
             Err(error) => return Err(error),
         };
-        Ok(Self {
+        let stale_boot = data.boot_id != boot_id;
+        if stale_boot {
+            data.boot_id = boot_id;
+            data.incomplete = !data.entries.is_empty();
+            data.committed = None;
+            for entry in &mut data.entries {
+                entry.state = State::Adding;
+            }
+        }
+        let mut journal = Self {
             path,
             _lock: lock,
             data,
@@ -152,7 +195,11 @@ impl Journal {
             fail_write: None,
             #[cfg(test)]
             crash_after_write: None,
-        })
+        };
+        if stale_boot {
+            journal.save()?;
+        }
+        Ok(journal)
     }
     fn save(&mut self) -> Result<(), Error> {
         self.ready()?;

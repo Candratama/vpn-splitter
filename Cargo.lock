@@ -5377,6 +5377,7 @@ dependencies = [
 name = "vpn-splitter-helper"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "libc",
  "serde",
  "serde_json",

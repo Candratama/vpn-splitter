@@ -220,3 +220,25 @@ available when checked; no privileged service or live route was changed.
 Policy checkpoint verification: release workspace suite 44 active tests passed
 (plus the ignored child fixture exercised by its parent); Clippy all targets
 with warnings denied and formatting pass. Native helper Task5 remains incomplete.
+
+## Native macOS helper implementation checkpoint
+
+The native implementation now builds against the local macOS SDK: authenticated
+NSXPC, ServiceManagement registration entry point, SystemConfiguration profile
+and IPv4 snapshot reading, PF_ROUTE read/add/delete, fixed protected journal path
+and session-only passive network subscriptions. An unprivileged anonymous XPC
+probe accepted the running test binary's designated requirement and rejected a
+wrong cdhash before the exported method. The route parser probe covers truncated
+RTM messages, malformed masks and exact destination/gateway/interface identities.
+Read-only native routing/profile enumeration passed; helper startup as a normal
+user was denied before storage or mutation.
+
+Production XPC requires Apple-anchored signatures for the same team and exact
+app/helper identifiers. No signing identity is available, so no production
+helper registration or route write was performed. Native routing writes, signed
+IPC, administrative denial/retry, crash, reboot and real VPN/public/internal
+connectivity remain UNVERIFIED. Task5's live qualification checkbox stays open.
+The saved PPP VPN endpoint must currently be a literal IPv4 address. This
+limitation prevents ambiguous protection of a DNS name's changing server set.
+Journals record the macOS boot UUID; present matching routes from a prior boot
+become uncertain rather than being claimed as still owned.

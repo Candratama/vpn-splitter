@@ -257,3 +257,21 @@ fn replacement_failure_restores_the_previous_plan_when_operations_allow_it() {
     let j = Journal::open(&path).unwrap();
     assert_eq!(j.committed_plan(), Some(&previous));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn journal_from_an_older_boot_does_not_claim_identical_current_routes() {
+    let (_dir, path, mut journal) = opened();
+    let mut backend = Backend::default();
+    apply(&mut journal, &plan(), &mut backend).unwrap();
+    drop(journal);
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    json["boot_id"] = serde_json::json!("previous-boot");
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    let mut journal = Journal::open(&path).unwrap();
+    let report = reconcile(&mut journal, &mut backend).unwrap();
+    assert!(!report.complete());
+    assert_eq!(report.uncertain, 1);
+    assert_eq!(backend.routes, plan().routes);
+}

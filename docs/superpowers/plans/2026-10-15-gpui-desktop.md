@@ -106,10 +106,10 @@ Shared types are introduced by the owning task below. Public operations return `
 
 **Interfaces:** Consume protocol v1 and Task 4 transactions. Produce `serve() -> Result<(), Error>`, `authorize_peer(...) -> Result<PeerIdentity, Error>`, `MacRouteBackend`, and desktop-facing `HelperClient::request(Request) -> Result<Reply, Error>`. Pin the actual native binding crates in Cargo.lock after checking their APIs. macOS helper registration uses ServiceManagement/launchd and authenticated XPC; a narrow native bridge is permitted only where Rust bindings do not cover XPC lifecycle safely.
 
-- [ ] Write boundary checks for unauthorized UID/code identity, replay/wrong session, wrong VPN interface, oversized (>1 MiB), malformed/truncated messages, invalid routes and concurrent clients. Assert rejection precedes any mutation; do not accept arbitrary executable names or shell strings.
-- [ ] Implement admin registration/activation, protected helper state and native route operations. Validate profile/interface and route bounds independently in the helper. XPC invalidation or VPN/network loss initiates owned-route cleanup; monitor the relevant OS events while a session exists. Recover unfinished journals before accepting Begin. Stop session monitoring and idle work when disconnected.
+- [x] Write boundary checks for unauthorized UID/code identity, replay/wrong session, wrong VPN interface, oversized (>1 MiB), malformed/truncated messages, invalid routes and concurrent clients. Assert rejection precedes any mutation; do not accept arbitrary executable names or shell strings.
+- [x] Implement admin registration/activation, protected helper state and native route operations. Validate profile/interface and route bounds independently in the helper. XPC invalidation or VPN/network loss initiates owned-route cleanup; monitor the relevant OS events while a session exists. Recover unfinished journals before accepting Begin. Stop session monitoring and idle work when disconnected.
 - [ ] On a controlled test machine, verify permission denial makes no changes; authorized app can apply/remove documentation test routes; wrong identity cannot; killing desktop triggers cleanup; restarting helper reconciles partial work. Run `cargo test -p vpn-splitter-helper`. Avoid changing live user routes for tests without an explicit test session.
-- [ ] Commit: `feat: add macOS privileged routing helper`.
+- [x] Commit: `feat: add macOS privileged routing helper`.
 
 ### Task 6: Integrate saved macOS VPN profiles and network events
 

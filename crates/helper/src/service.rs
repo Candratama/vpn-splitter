@@ -222,6 +222,10 @@ impl<B: RouteBackend> Service<B> {
         };
         Ok(Reply { header, result })
     }
+    pub fn has_open_session(&self) -> bool {
+        self.binding.as_ref().is_some_and(|binding| binding.open)
+            || self.journal.requires_reconciliation()
+    }
     pub fn invalidated(&mut self, connection: u64) -> Result<(), Error> {
         if !self
             .binding

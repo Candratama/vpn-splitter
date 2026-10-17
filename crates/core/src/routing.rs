@@ -19,7 +19,8 @@ pub struct Route {
     pub gateway: Option<Ipv4Addr>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkSnapshot {
     pub profile_id: ProfileId,
     pub profile_exists: bool,
