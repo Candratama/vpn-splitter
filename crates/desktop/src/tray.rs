@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Bounds, Global, MenuItem, NoAction, WindowBounds, WindowHandle, WindowOptions,
-    actions, px, size,
+    actions, point, px, size,
 };
 use gpui_tray::{Icon, Tray};
 
@@ -250,8 +250,9 @@ fn open_page(cx: &mut App, page: crate::settings::Page) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(720.0), px(520.0))),
             titlebar: Some(gpui::TitlebarOptions {
-                title: Some("VPN Splitter".into()),
-                ..Default::default()
+                title: None,
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(16.0), px(16.0))),
             }),
             ..Default::default()
         },
