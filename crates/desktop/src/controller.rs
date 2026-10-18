@@ -1,4 +1,7 @@
+#[cfg(target_os = "macos")]
 use crate::platform::macos::{self as platform, Profile};
+#[cfg(target_os = "windows")]
+use crate::platform::windows::{self as platform, Profile};
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},

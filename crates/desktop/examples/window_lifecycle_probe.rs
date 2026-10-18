@@ -26,6 +26,7 @@ use gpui::{App, MenuItem, NoAction, QuitMode};
 use std::time::Duration;
 
 fn main() {
+    #[cfg(target_os = "macos")]
     let _ = platform::macos::relaunch_local_if_requested as fn() -> std::io::Result<()>;
     let fixture = tempfile::tempdir().unwrap();
     PROBE_DIRECTORY.set(fixture.path().to_owned()).unwrap();

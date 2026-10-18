@@ -321,6 +321,7 @@ fn quit(cx: &mut App) {
     send(cx, crate::controller::Command::Quit);
 }
 fn finish_quit(cx: &mut App) {
+    #[cfg(target_os = "macos")]
     if let Err(error) = crate::platform::macos::relaunch_local_if_requested() {
         eprintln!("Cannot reopen installed app: {error}");
     }

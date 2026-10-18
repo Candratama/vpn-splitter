@@ -23,7 +23,7 @@ mod tests {
         view.config.profile_id = Some("private-profile-marker".into());
         view.config.destinations =
             vpn_splitter_core::config::import_rules("198.51.100.7\ngit.office.example").unwrap();
-        view.profiles.push(crate::platform::macos::Profile {
+        view.profiles.push(crate::platform::Profile {
             id: vpn_splitter_core::session::ProfileId::try_from(
                 "private-profile-marker".to_owned(),
             )

@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::{
     io::{Read, Write},
@@ -126,7 +128,25 @@ impl Drop for FocusServer {
         let _ = std::fs::remove_file(&self.path);
     }
 }
-#[cfg(test)]
+#[cfg(not(unix))]
+pub struct FocusServer;
+
+#[cfg(not(unix))]
+impl Drop for FocusServer {
+    fn drop(&mut self) {}
+}
+
+#[cfg(not(unix))]
+pub fn serve(_directory: &Path, _tx: async_channel::Sender<()>) -> std::io::Result<FocusServer> {
+    Ok(FocusServer)
+}
+
+#[cfg(not(unix))]
+pub fn open_existing(_directory: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     #[test]
     fn unrelated_file_at_socket_path_is_never_removed() {

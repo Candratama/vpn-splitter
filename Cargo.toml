@@ -13,3 +13,6 @@ gpui = { version = "=0.2.2", git = "https://github.com/zed-industries/zed.git", 
 [profile.release]
 debug = 0
 strip = "debuginfo"
+
+[profile.release.package.gpui_windows]
+debug-assertions = true
