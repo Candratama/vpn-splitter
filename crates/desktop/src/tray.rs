@@ -75,7 +75,6 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
         .on_action(|_: &Quit, cx| cx.defer(quit));
     let tray = Tray::builder()
         .icon(icon()?)
-        .title("VPN")
         .tooltip("VPN Splitter")
         .menu(menu)
         .build(cx)?;
