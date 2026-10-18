@@ -6,6 +6,10 @@ Send office IPv4 traffic through your saved L2TP VPN while keeping public intern
 on Wi-Fi or Ethernet. The Rust desktop app uses GPUI and lives in the macOS menu
 bar. You can manage the VPN connection and routing rules from Settings.
 
+Real app screenshots below use sample destinations in an isolated configuration. Office IPs and hostnames are not shown.
+
+![VPN profile selection in the macOS app](docs/images/vpn-profile.jpg)
+
 ## Platform support
 
 | Platform | Status |
@@ -64,6 +68,8 @@ Hostnames must resolve to IPv4 before their routes can be applied. The app shows
 VPN connection and routing status separately. Quit cleans up app-owned routes
 and disconnects a VPN connection started by the app.
 
+![Routing rules with documentation addresses and an example hostname.](docs/images/routing-rules.jpg)
+
 ## Update or remove the helper
 
 To update, disconnect and quit the installed app, build a new preview with
@@ -74,6 +80,8 @@ To remove the helper, disconnect first, then choose **Remove helper...** in
 **Helper**. Removal unloads the service and checks route cleanup. If cleanup
 fails, it retains the service files and recovery journal for retry. It preserves
 the installed app, saved VPN profiles, credentials, and user configuration.
+
+![Helper setup before administrator approval.](docs/images/helper-setup.jpg)
 
 ## Build commands
 
