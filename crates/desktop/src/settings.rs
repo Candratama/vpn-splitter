@@ -964,11 +964,11 @@ impl Render for Settings {
 
         let save = entity;
         let (status_dot, status_text) = match live.state {
-            SessionState::Active => (rgb(0x34c759), "VPN connected · Routing active"),
-            SessionState::Connecting => (rgb(0xff9500), "Connecting VPN…"),
-            SessionState::Applying => (rgb(0xff9500), "Applying routes…"),
-            SessionState::Disconnecting => (rgb(0xff9500), "Disconnecting VPN…"),
-            SessionState::CleanupRequired => (rgb(0xff3b30), "Route cleanup required"),
+            SessionState::Active => (rgb(0x34c759), "Routing active"),
+            SessionState::Connecting => (rgb(0xff9500), "Connecting…"),
+            SessionState::Applying => (rgb(0xff9500), "Applying…"),
+            SessionState::Disconnecting => (rgb(0xff9500), "Disconnecting…"),
+            SessionState::CleanupRequired => (rgb(0xff3b30), "Cleanup required"),
             SessionState::Disconnected => (
                 if live.vpn_connected {
                     rgb(0x34c759)
@@ -976,9 +976,9 @@ impl Render for Settings {
                     rgb(0x8e8e93)
                 },
                 if live.vpn_connected {
-                    "VPN connected · Routing idle"
+                    "VPN connected"
                 } else {
-                    "VPN disconnected · Routing idle"
+                    "Disconnected"
                 },
             ),
         };
@@ -997,7 +997,8 @@ impl Render for Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2p5()
+                    .gap_2()
+                    .min_w_0()
                     .child(
                         div()
                             .size(px(8.))
@@ -1043,6 +1044,7 @@ impl Render for Settings {
                 .flex()
                 .items_center()
                 .gap_2()
+                .flex_shrink_0()
                 .child(styled_button(
                     "save-rules",
                     if live.state == SessionState::Active {
