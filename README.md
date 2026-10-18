@@ -56,12 +56,40 @@ bash test_vpn_splitter.sh
 
 ## GPUI desktop app (macOS preview)
 
-Build the menu bar app on Apple Silicon with Xcode and Rust 1.97.1:
+Install Rust (tested with 1.97.1), GNU Make, and the native build tools for your
+OS. On macOS, install Xcode and its Command Line Tools first.
 
 ```sh
-./scripts/package-macos.sh
+make help       # List available commands
+make build      # Release binaries for your current OS in target/release/
+make macos      # Build and sign target/release/VPN Splitter.app on macOS
+make test       # Rust and shell regression tests; requires Bash
+```
+
+Open the macOS app after building:
+
+```sh
 open "target/release/VPN Splitter.app"
 ```
+
+To cross-build Windows binaries from a Bash environment, install the Rust
+`x86_64-pc-windows-gnu` target and a MinGW-w64 toolchain providing
+`x86_64-w64-mingw32-gcc`, then run:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+make windows
+```
+
+The Windows `.exe` files are written to `target/release/windows/`. On a Windows
+machine with GNU Make and the native Rust build prerequisites installed,
+`make build` uses the active Rust toolchain and writes `.exe` files to
+`target/release/`. Windows VPN/helper integration is still unsupported; these
+build commands do not provide working Windows VPN management.
+
+`make clean` removes Cargo build outputs. The existing scripts can also be run
+directly if GNU Make is unavailable. Building does not install the privileged
+helper; installation happens through the app's administrator approval flow.
 
 Open **VPN → Settings**, select a saved L2TP profile, enter or import destination
 IPv4 addresses/CIDRs/hostnames, then Save. Disable **Send all traffic** in the
