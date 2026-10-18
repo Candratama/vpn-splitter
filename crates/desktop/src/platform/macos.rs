@@ -1,6 +1,7 @@
 use vpn_splitter_core::{Error, config::Destination, routing::ResolvedHost, session::ProfileId};
 pub use vpn_splitter_helper::platform::macos::{
-    HelperClient, Profile, Subscription, helper_status, list_profiles, register_helper, snapshot,
+    HelperClient, Profile, Subscription, helper_status, list_profiles, register_helper, set_login,
+    snapshot,
 };
 pub fn connect(profile: &ProfileId) -> Result<(), Error> {
     vpn_splitter_helper::platform::macos::control(profile, true)

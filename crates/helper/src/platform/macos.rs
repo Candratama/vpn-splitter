@@ -423,3 +423,10 @@ pub fn helper_status() -> i32 {
     }
     unsafe { vs_helper_status() }
 }
+
+pub fn set_login(enabled: bool) -> Result<(), Error> {
+    unsafe extern "C" {
+        fn vs_login(enabled: i32) -> i32;
+    }
+    check(unsafe { vs_login(i32::from(enabled)) })
+}

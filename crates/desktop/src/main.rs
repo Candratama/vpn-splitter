@@ -1,6 +1,10 @@
 mod controller;
+mod diagnostics;
+mod focus;
 mod platform;
+mod settings;
 mod single_instance;
+mod text_input;
 mod tray;
 mod window_visibility;
 
@@ -13,9 +17,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let directory = application_directory()?;
     std::fs::create_dir_all(&directory)?;
     let Some(_instance) = SingleInstance::acquire(&directory.join("desktop.lock"))? else {
-        eprintln!("VPN Splitter is already running.");
+        focus::open_existing(&directory)?;
         return Ok(());
     };
+    let (focus_tx, focus_rx) = async_channel::bounded(1);
+    let _focus_server = focus::serve(&directory, focus_tx)?;
     let application = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
     application.on_reopen(|cx| {
         cx.spawn(async |cx| {
@@ -24,6 +30,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .detach();
     });
     application.run(move |cx| {
+        cx.spawn(async move |cx| {
+            while focus_rx.recv().await.is_ok() {
+                cx.update(|cx| cx.dispatch_action(&tray::OpenSettings));
+            }
+        })
+        .detach();
         #[cfg(target_os = "macos")]
         {
             use objc2::MainThreadMarker;

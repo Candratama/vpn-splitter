@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Bounds, Context, Global, MenuItem, NoAction, Render, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Global, MenuItem, NoAction, WindowBounds, WindowHandle, WindowOptions,
+    actions, px, size,
 };
 use gpui_tray::{Icon, Tray};
 
@@ -8,6 +8,7 @@ actions!(
     vpn_splitter,
     [
         OpenSettings,
+        OpenDiagnostics,
         HideSettings,
         Connect,
         Disconnect,
@@ -19,9 +20,15 @@ actions!(
     ]
 );
 
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(no_json)]
+struct SelectProfile {
+    id: String,
+}
+
 struct Desktop {
     tray: Tray,
-    settings: Option<WindowHandle<PrototypeSettings>>,
+    settings: Option<WindowHandle<crate::settings::Settings>>,
     view: crate::controller::View,
     commands: std::sync::mpsc::Sender<crate::controller::Command>,
 }
@@ -31,7 +38,21 @@ impl Global for Desktop {}
 pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
     // Global actions can run while GPUI temporarily borrows the active window.
     // Defer handle updates until that dispatch finishes.
+    cx.on_action(|action: &SelectProfile, cx| {
+        let id = action.id.clone();
+        cx.defer(move |cx| {
+            let view = view(cx);
+            if view.state == vpn_splitter_core::session::SessionState::Disconnected
+                && !view.preparing
+            {
+                let mut config = view.config.clone();
+                config.profile_id = Some(id);
+                send(cx, crate::controller::Command::Save(config));
+            }
+        });
+    });
     cx.on_action(|_: &OpenSettings, cx| cx.defer(open_settings))
+        .on_action(|_: &OpenDiagnostics, cx| cx.defer(open_diagnostics))
         .on_action(|_: &HideSettings, cx| cx.defer(hide_settings))
         .on_action(|_: &Connect, cx| cx.defer(|cx| send(cx, crate::controller::Command::Connect)))
         .on_action(|_: &Disconnect, cx| {
@@ -54,6 +75,8 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
         .tooltip("VPN Splitter")
         .menu(menu)
         .build(cx)?;
+    crate::settings::bind(cx);
+    cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
     let (commands, updates) = crate::controller::start(crate::application_directory()?);
     cx.set_global(Desktop {
         tray: tray.clone(),
@@ -97,6 +120,10 @@ pub fn send(cx: &mut App, command: crate::controller::Command) {
     refresh_menu(cx);
 }
 pub fn menu(cx: &mut App) -> Vec<MenuItem> {
+    // The tray builder requests its first menu before Desktop can own the tray.
+    if !cx.has_global::<Desktop>() {
+        return vec![MenuItem::action("Starting VPN Splitter…", NoAction).disabled(true)];
+    }
     use vpn_splitter_core::session::SessionState;
     let view = view(cx);
     let disconnected = view.state == SessionState::Disconnected;
@@ -135,10 +162,31 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
         MenuItem::action("Retry cleanup", RetryCleanup)
             .disabled(view.state != SessionState::CleanupRequired),
     );
+    items.push(MenuItem::submenu(gpui::Menu {
+        name: "VPN profile".into(),
+        disabled: false,
+        items: view
+            .profiles
+            .iter()
+            .map(|profile| {
+                MenuItem::action(
+                    profile.name.clone(),
+                    SelectProfile {
+                        id: profile.id.as_str().to_owned(),
+                    },
+                )
+                .checked(view.config.profile_id.as_deref() == Some(profile.id.as_str()))
+                .disabled(
+                    !disconnected || view.preparing || !profile.supported || !profile.split_enabled,
+                )
+            })
+            .collect(),
+    }));
     let adopted = view.adopted;
     items.push(MenuItem::separator());
     items
         .push(MenuItem::action("Profiles / Settings…", OpenSettings).checked(settings_visible(cx)));
+    items.push(MenuItem::action("Diagnostics…", OpenDiagnostics));
     items.push(MenuItem::action("Reload VPN profiles", ReloadProfiles));
     items
         .push(MenuItem::action("Install / approve helper…", InstallHelper).disabled(!disconnected));
@@ -154,11 +202,19 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
     items
 }
 
-fn open_settings(cx: &mut App) {
+pub fn open_settings(cx: &mut App) {
+    open_page(cx, crate::settings::Page::Settings);
+}
+pub fn open_diagnostics(cx: &mut App) {
+    open_page(cx, crate::settings::Page::Diagnostics);
+}
+fn open_page(cx: &mut App, page: crate::settings::Page) {
     let started = std::time::Instant::now();
     if let Some(handle) = cx.global::<Desktop>().settings
         && handle
-            .update(cx, |_, window, _| {
+            .update(cx, |view, window, cx| {
+                view.page = page;
+                cx.notify();
                 window.on_next_frame(move |_, _| {
                     eprintln!(
                         "settings_reveal_frame_ms={:.3}",
@@ -173,7 +229,7 @@ fn open_settings(cx: &mut App) {
         refresh_menu(cx);
         return;
     }
-    let bounds = Bounds::centered(None, size(px(460.0), px(260.0)), cx);
+    let bounds = Bounds::centered(None, size(px(600.0), px(700.0)), cx);
     let result = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -194,7 +250,11 @@ fn open_settings(cx: &mut App) {
                     started.elapsed().as_secs_f64() * 1000.0
                 );
             });
-            cx.new(|_| PrototypeSettings)
+            cx.new(|cx| {
+                let mut view = crate::settings::Settings::new(cx);
+                view.page = page;
+                view
+            })
         },
     );
     match result {
@@ -249,25 +309,6 @@ fn finish_quit(cx: &mut App) {
         eprintln!("Cannot close tray: {error}");
     }
     cx.quit();
-}
-
-struct PrototypeSettings;
-
-impl Render for PrototypeSettings {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .bg(rgb(0xf5f5f3))
-            .text_color(rgb(0x202421))
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(div().text_xl().child("VPN Splitter"))
-            .child(format!("VPN: {:?}",view(cx).state))
-            .child(view(cx).error.map(crate::controller::message).unwrap_or("Select a profile and import destinations in Settings (editor integration follows)."))
-            .child("Close this window to keep the app in the menu bar. Use the tray menu to quit.")
-    }
 }
 
 fn icon() -> gpui_tray::Result<Icon> {

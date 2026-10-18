@@ -5364,14 +5364,18 @@ dependencies = [
 name = "vpn-splitter-desktop"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "async-channel",
  "gpui",
  "gpui-tray",
  "gpui_platform",
+ "libc",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "raw-window-handle",
+ "serde_json",
  "tempfile",
+ "unicode-segmentation",
  "vpn-splitter-core",
  "vpn-splitter-helper",
  "windows 0.62.2",

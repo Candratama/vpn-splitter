@@ -54,26 +54,32 @@ The tests mock operating system commands and do not change the Mac's routing:
 bash test_vpn_splitter.sh
 ```
 
-## GPUI desktop prototype
+## GPUI desktop app (macOS preview)
 
-The desktop branch currently contains a tray/window lifecycle prototype. Its VPN
-action is disabled: use the CLI above for routing. The prototype does not read
-your routing config, connect VPNs, or change network settings.
-
-On an Apple Silicon Mac with Xcode and Rust 1.97.1:
+Build the menu bar app on Apple Silicon with Xcode and Rust 1.97.1:
 
 ```sh
-# Required once if Xcode's optional Metal compiler is missing:
-xcodebuild -downloadComponent MetalToolchain
-./scripts/run-macos-prototype.sh
+./scripts/package-macos.sh
+open "target/release/VPN Splitter.app"
 ```
 
-Use the **VPN** menu bar item to open Settings or quit. Closing Settings keeps
-the tray alive. The launcher creates an unsigned local bundle at
-`target/release/VPN Splitter Prototype.app`; it installs no privileged service.
+Open **VPN → Settings**, select a saved L2TP profile, enter or import destination
+IPv4 addresses/CIDRs/hostnames, then Save. Disable **Send all traffic** in the
+macOS VPN profile first. Configuration stays in your local Application Support
+folder; the app does not import the CLI's private configuration automatically.
 
-The first performance gate found retained memory after repeated window creation.
-The approved reuse lifecycle now hides/reveals one Settings window and passes the
-measured macOS gate; see [desktop validation](docs/desktop-validation.md). The architecture and execution
-plan are in [docs/desktop-architecture.md](docs/desktop-architecture.md) and
-[docs/superpowers/plans/2026-10-15-gpui-desktop.md](docs/superpowers/plans/2026-10-15-gpui-desktop.md).
+The UI includes Connect/Disconnect, routing status, cleanup retry and diagnostics.
+**Automatic VPN/routing is not yet qualified for use.** It requires an authenticated
+privileged helper and an app/helper signed by the same Apple developer team.
+Unsigned local builds can edit configuration but cannot activate that helper.
+No helper is installed by building or opening the app.
+
+For a signed build, set `VPN_SPLITTER_SIGN_IDENTITY` in your local build environment
+before running the packaging script. The script signs the embedded helper first,
+then the app. Signing is not notarization or proof of live VPN integration.
+Installation/admin approval and live route cleanup still require qualification on
+a controlled Mac. Keep using the CLI above for routing until that is complete.
+
+Windows support and further performance/accessibility qualification are deferred
+while the macOS product is completed. See [desktop validation](docs/desktop-validation.md)
+for measured results and incomplete checks.

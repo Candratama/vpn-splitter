@@ -173,7 +173,10 @@ fn run(
 ) {
     let origin = Instant::now();
     let path = directory.join("config.json");
-    let mut view = View::default();
+    let mut view = View {
+        config_revision: 1,
+        ..View::default()
+    };
     match load_config(&path) {
         Ok(config) => view.config = config,
         Err(error) => view.error = Some(fault(&error)),
@@ -491,19 +494,32 @@ fn run(
                             SessionState::Disconnected | SessionState::Active
                         )
                         && (session.state() == SessionState::Disconnected
-                            || config.profile_id == view.config.profile_id) =>
+                            || (config.profile_id == view.config.profile_id
+                                && config.launch_at_login == view.config.launch_at_login)) =>
                 {
                     view.error = None;
                     if session.state() == SessionState::Active {
                         pending_config = Some(config);
                         effects = session.handle(Event::Refresh { now_ms: now });
                     } else {
+                        let login_changed = config.launch_at_login != view.config.launch_at_login;
+                        if login_changed
+                            && let Err(error) = platform::set_login(config.launch_at_login)
+                        {
+                            view.error = Some(fault(&error));
+                            continue;
+                        }
                         match save_config(&path, &config) {
                             Ok(()) => {
                                 view.config = config;
                                 view.config_revision += 1;
                             }
-                            Err(error) => view.error = Some(fault(&error)),
+                            Err(error) => {
+                                if login_changed {
+                                    let _ = platform::set_login(view.config.launch_at_login);
+                                }
+                                view.error = Some(fault(&error));
+                            }
                         }
                     }
                 }
@@ -533,10 +549,10 @@ fn run(
                 }
             }
             Command::DnsIdle => {
-                if let Some(job) = pending_dns.take() {
-                    if let Err(mpsc::TrySendError::Full(job)) = dns_tx.try_send(job) {
-                        pending_dns = Some(job);
-                    }
+                if let Some(job) = pending_dns.take()
+                    && let Err(mpsc::TrySendError::Full(job)) = dns_tx.try_send(job)
+                {
+                    pending_dns = Some(job);
                 }
             }
             Command::Event(mut event) => {
@@ -556,22 +572,20 @@ fn run(
                     }
                     _ => false,
                 };
-                if matching {
-                    if let Event::Planned { result, .. } = &mut event {
-                        if result.is_ok() {
-                            if let Some(candidate) = pending_config.take() {
-                                match save_config(&path, &candidate) {
-                                    Ok(()) => {
-                                        previous_config = Some(view.config.clone());
-                                        view.config = candidate;
-                                        view.config_revision += 1;
-                                    }
-                                    Err(error) => *result = Err(fault(&error)),
+                if matching && let Event::Planned { result, .. } = &mut event {
+                    if result.is_ok() {
+                        if let Some(candidate) = pending_config.take() {
+                            match save_config(&path, &candidate) {
+                                Ok(()) => {
+                                    previous_config = Some(view.config.clone());
+                                    view.config = candidate;
+                                    view.config_revision += 1;
                                 }
+                                Err(error) => *result = Err(fault(&error)),
                             }
-                        } else {
-                            pending_config = None;
                         }
+                    } else {
+                        pending_config = None;
                     }
                 }
                 let mut applied = false;
@@ -637,15 +651,15 @@ fn run(
         {
             pending_config = None;
         }
-        if session.state() != SessionState::Applying {
-            if let Some(previous) = previous_config.take() {
-                match save_config(&path, &previous) {
-                    Ok(()) => {
-                        view.config = previous;
-                        view.config_revision += 1;
-                    }
-                    Err(error) => view.error = Some(fault(&error)),
+        if session.state() != SessionState::Applying
+            && let Some(previous) = previous_config.take()
+        {
+            match save_config(&path, &previous) {
+                Ok(()) => {
+                    view.config = previous;
+                    view.config_revision += 1;
                 }
+                Err(error) => view.error = Some(fault(&error)),
             }
         }
         view.warnings = if session
@@ -676,10 +690,10 @@ mod tests {
     fn wait_for(rx: &async_channel::Receiver<View>, predicate: impl Fn(&View) -> bool) -> View {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(view) = rx.try_recv() {
-                if predicate(&view) {
-                    return view;
-                }
+            if let Ok(view) = rx.try_recv()
+                && predicate(&view)
+            {
+                return view;
             }
             assert!(
                 Instant::now() < deadline,

@@ -265,3 +265,21 @@ and disconnected Quit tests passed. Existing core tests cover late callbacks,
 cancel/timeout, adoption and route replacement. No signed privileged helper,
 Moratel connection, public/internal traffic, cable switch or real sleep/wake was
 exercised. These remain explicit release qualification blockers.
+
+## macOS product checkpoint — 2026-10-18
+
+Latest priority: finish the usable macOS product before Windows and further
+performance/polish work. This checkpoint is incomplete for VPN integration.
+
+- `scripts/package-macos.sh` builds `target/release/VPN Splitter.app` with the
+  desktop, helper and SMAppService daemon plist. No local configuration is bundled.
+- Release build passed. Workspace tests: 61 passed, 1 ignored. Formatting and diff
+  checks passed. Opening the actual product exposed a tray initialization panic;
+  the first menu now waits for Desktop state. After rebuilding, the process stayed
+  running and second-instance focus opened Settings (tray 111.746 ms, first frame
+  304.933 ms). These timings are one launch, not resource qualification.
+- Current Mac reports zero valid signing identities. The artifact is unsigned.
+  Automatic Connect/Apply is blocked by the signed-helper policy; no privileged
+  service was installed and no VPN or routes were changed. Signed integration,
+  admin approval, cleanup and uninstall qualification remain outstanding.
+- Full accessibility, resource matrix and Windows parity remain deferred.

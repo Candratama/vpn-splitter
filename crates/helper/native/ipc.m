@@ -196,3 +196,10 @@ int vs_helper_status(void) { @autoreleasepool {
     if(!self_requirement(VS_SERVICE))return -1;
     return (int)[SMAppService daemonServiceWithPlistName:@"com.candratama.vpnsplitter.helper.plist"].status;
 }}
+int vs_login(int enabled) { @autoreleasepool {
+    if(!self_requirement(VS_SERVICE))return EACCES;
+    SMAppService *service=SMAppService.mainAppService;NSError *error=nil;
+    if(enabled && service.status==SMAppServiceStatusEnabled)return 0;
+    if(!enabled && service.status==SMAppServiceStatusNotRegistered)return 0;
+    return (enabled?[service registerAndReturnError:&error]:[service unregisterAndReturnError:&error])?0:EACCES;
+}}
