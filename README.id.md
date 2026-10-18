@@ -7,6 +7,10 @@ internet umum tetap lewat Wi-Fi atau Ethernet. Aplikasi desktop ini dibuat
 dengan Rust dan GPUI, serta bisa diakses dari ikon di menu bar macOS. Kamu bisa
 mengelola koneksi VPN dan aturan routing lewat Settings.
 
+Screenshot aplikasi di bawah memakai konfigurasi terpisah berisi data contoh. IP dan hostname kantor tidak ditampilkan.
+
+![Pemilihan profil VPN di aplikasi macOS](docs/images/vpn-profile.jpg)
+
 ## Dukungan platform
 
 | Platform | Status |
@@ -66,6 +70,8 @@ Hostname harus berhasil diterjemahkan menjadi IPv4 sebelum rutenya diterapkan.
 Status koneksi VPN dan routing ditampilkan terpisah. Quit membersihkan rute
 milik aplikasi dan memutus koneksi VPN yang dimulai oleh aplikasi.
 
+![Aturan routing dengan alamat dokumentasi dan hostname contoh.](docs/images/routing-rules.jpg)
+
 ## Memperbarui atau menghapus helper
 
 Untuk memperbarui, putuskan VPN dan tutup aplikasi yang terpasang. Build preview
@@ -78,6 +84,8 @@ Untuk menghapus helper, putuskan koneksi terlebih dahulu, lalu pilih
 memeriksa pembersihan rute. Jika gagal, file layanan dan jurnal pemulihan tetap
 disimpan agar bisa dicoba ulang. Aplikasi yang terpasang, profil VPN, kredensial,
 dan konfigurasi pengguna tetap disimpan.
+
+![Setup helper sebelum persetujuan administrator.](docs/images/helper-setup.jpg)
 
 ## Perintah build
 
