@@ -44,6 +44,9 @@ if [[ "$mode" == remove ]]; then
     exit 0
 fi
 
+staging=$(mktemp -d /Library/PrivilegedHelperTools/.vpn-splitter.XXXXXX)
+trap 'rm -rf "$staging"' EXIT
+
 if [[ "$origin_bundle" != "$installed" ]]; then
     # Updating an installed pair requires removing the helper first. Preserve
     # the existing app and its hashes while a service might still be active.
@@ -63,8 +66,6 @@ if [[ "$origin_bundle" != "$installed" ]]; then
         fi
         rm -f "$plist"
     fi
-    staging=$(mktemp -d /Library/PrivilegedHelperTools/.vpn-splitter.XXXXXX)
-    trap 'rm -rf "$staging"' EXIT
     ditto --noacl --noextattr --noqtn "$source_bundle" "$staging/VPN Splitter.app"
     [[ -z "$(find "$staging/VPN Splitter.app" -type l -print -quit)" ]] || exit 3
     chmod -RN "$staging/VPN Splitter.app"
@@ -86,8 +87,6 @@ if [[ "$origin_bundle" != "$installed" ]]; then
 fi
 codesign --verify --deep --strict "$installed"
 if [[ ! -e "$plist" ]]; then
-    staging=$(mktemp -d /Library/PrivilegedHelperTools/.vpn-splitter.XXXXXX)
-    trap 'rm -rf "$staging"' EXIT
     /usr/libexec/PlistBuddy -c "Add :Label string $label" "$staging/helper.plist"
     /usr/libexec/PlistBuddy -c 'Add :ProgramArguments array' "$staging/helper.plist"
     /usr/libexec/PlistBuddy -c "Add :ProgramArguments:0 string $installed/Contents/MacOS/vpn-splitter-helper" "$staging/helper.plist"

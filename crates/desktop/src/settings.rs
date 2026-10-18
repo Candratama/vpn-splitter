@@ -70,6 +70,15 @@ fn connection_action_disabled(live: &controller::View, dirty: bool, awaiting_sav
         || (live.state == SessionState::Disconnected
             && (!live.config_ready || live.config.profile_id.is_none() || dirty || awaiting_save))
 }
+fn can_reload_saved_draft(
+    dirty: bool,
+    submitted: Option<&(Config, String)>,
+    draft: &Config,
+    content: &str,
+) -> bool {
+    !dirty || submitted.is_some_and(|(saved, text)| saved == draft && text == content)
+}
+
 pub struct Settings {
     pub page: Page,
     focus_handle: FocusHandle,
@@ -77,7 +86,7 @@ pub struct Settings {
     draft: Config,
     revision: u64,
     dirty: bool,
-    awaiting_save: bool,
+    pending_save: Option<(Config, String)>,
     file_busy: bool,
     error: Option<String>,
     notice: Option<String>,
@@ -108,18 +117,21 @@ impl Settings {
             draft,
             revision,
             dirty: false,
-            awaiting_save: false,
+            pending_save: None,
             file_busy: false,
             error: None,
             notice: None,
         }
     }
     fn save(&mut self, _: &SaveSettings, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_save.is_some() || self.file_busy {
+            return;
+        }
         match import_rules(&self.editor.read(cx).content()) {
             Ok(rules) => {
                 self.draft.destinations = rules;
                 self.error = None;
-                self.awaiting_save = true;
+                self.pending_save = Some((self.draft.clone(), self.editor.read(cx).content()));
                 tray::send(cx, Command::Save(self.draft.clone()));
             }
             Err(error) => self.error = Some(error.to_string()),
@@ -368,24 +380,35 @@ impl Render for Settings {
             window.focus(&self.focus_handle, cx);
         }
         let live = tray::view(cx).clone();
-        if self.revision != live.config_revision && (!self.dirty || self.awaiting_save) {
+        if self.revision != live.config_revision {
+            let reload = can_reload_saved_draft(
+                self.dirty,
+                self.pending_save.as_ref(),
+                &self.draft,
+                &self.editor.read(cx).content(),
+            );
             self.revision = live.config_revision;
-            self.draft = live.config.clone();
-            self.dirty = false;
-            self.awaiting_save = false;
-            let content = self
-                .draft
-                .destinations
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n");
-            self.editor
-                .update(cx, |editor, cx| editor.set_content(content, cx));
-            self.notice = Some("Saved.".into());
+            self.pending_save = None;
+            if reload {
+                self.draft = live.config.clone();
+                self.dirty = false;
+                let content = self
+                    .draft
+                    .destinations
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.editor
+                    .update(cx, |editor, cx| editor.set_content(content, cx));
+                self.notice = Some("Saved.".into());
+            } else {
+                self.notice =
+                    Some("Saved configuration updated. Your newer edits are unsaved.".into());
+            }
         }
         if live.error.is_some() {
-            self.awaiting_save = false;
+            self.pending_save = None;
         }
         let dark = matches!(
             window.appearance(),
@@ -1052,7 +1075,7 @@ impl Render for Settings {
                     } else {
                         "Save changes"
                     },
-                    busy || self.awaiting_save || !self.dirty,
+                    busy || self.pending_save.is_some() || !self.dirty,
                     ButtonVariant::Secondary,
                     move |window, cx| {
                         save.update(cx, |this, cx| this.save(&SaveSettings, window, cx))
@@ -1067,7 +1090,7 @@ impl Render for Settings {
                     } else {
                         "Disconnect VPN"
                     },
-                    connection_action_disabled(&live, self.dirty, self.awaiting_save),
+                    connection_action_disabled(&live, self.dirty, self.pending_save.is_some()),
                     if live.state == SessionState::Disconnected {
                         ButtonVariant::Primary
                     } else {
@@ -1129,6 +1152,42 @@ impl Render for Settings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_completion_preserves_edits_made_after_submission() {
+        use super::*;
+        let submitted = (Config::default(), "198.51.100.7".to_owned());
+        assert!(can_reload_saved_draft(
+            true,
+            Some(&submitted),
+            &submitted.0,
+            &submitted.1
+        ));
+        assert!(!can_reload_saved_draft(
+            true,
+            Some(&submitted),
+            &submitted.0,
+            "198.51.100.8"
+        ));
+        let mut newer = submitted.0.clone();
+        newer.launch_at_login = !newer.launch_at_login;
+        assert!(!can_reload_saved_draft(
+            true,
+            Some(&submitted),
+            &newer,
+            &submitted.1
+        ));
+        newer = submitted.0.clone();
+        newer.profile_id = Some("Another VPN".into());
+        assert!(!can_reload_saved_draft(
+            true,
+            Some(&submitted),
+            &newer,
+            &submitted.1
+        ));
+        assert!(!can_reload_saved_draft(true, None, &newer, &submitted.1));
+        assert!(can_reload_saved_draft(false, None, &newer, &submitted.1));
+    }
+
     #[test]
     fn unsaved_edits_do_not_block_disconnect_or_cancel() {
         let mut view = crate::controller::View::default();

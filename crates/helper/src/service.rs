@@ -36,7 +36,6 @@ struct Binding {
     vpn: NetworkInterface,
     sequence: u64,
     open: bool,
-    connected: bool,
 }
 pub struct Service<B> {
     journal: Journal,
@@ -148,7 +147,6 @@ impl<B: RouteBackend> Service<B> {
                 vpn: *vpn_interface,
                 sequence: 1,
                 open: true,
-                connected: true,
             });
             return Ok(Reply {
                 header,
@@ -175,16 +173,6 @@ impl<B: RouteBackend> Service<B> {
             });
         }
         let binding = self.binding.as_mut().ok_or(Error::Permission)?;
-        if !binding.connected
-            && binding.peer.uid == peer.uid
-            && binding.peer.verified_requirement == peer.verified_requirement
-            && binding.session == header.session
-            && matches!(request, Request::Clear { .. } | Request::Status { .. })
-        {
-            binding.peer = peer.clone();
-            binding.connected = true;
-        }
-
         if &binding.peer != peer
             || binding.session != header.session
             || binding.sequence.checked_add(1) != Some(header.sequence)
@@ -287,11 +275,10 @@ impl<B: RouteBackend> Service<B> {
         {
             return Ok(());
         }
-        self.binding.as_mut().unwrap().connected = false;
+        self.binding = None;
         if !crate::journal::clear(&mut self.journal, &mut self.backend)?.complete() {
             return Err(Error::Cleanup);
         }
-        self.binding = None;
         Ok(())
     }
 }
@@ -735,6 +722,99 @@ mod tests {
         assert_eq!(service.backend.mutations, 0);
     }
 
+    #[test]
+    fn failed_invalidation_allows_new_authenticated_session_to_retry_cleanup() {
+        let (_dir, mut s) = service();
+        let id = SessionId::new();
+        let begin = request(1, id);
+        s.request(&peer(), &begin.encode().unwrap(), &mut snapshot)
+            .unwrap();
+        let Request::Begin {
+            profile_id,
+            vpn_interface,
+            ..
+        } = begin
+        else {
+            unreachable!()
+        };
+        let plan = RoutePlan {
+            profile_id,
+            vpn_interface,
+            routes: vec![Route {
+                destination: "198.51.100.7".parse().unwrap(),
+                prefix: 32,
+                interface_id: 9,
+                gateway: None,
+            }],
+            warnings: vec![],
+        };
+        let r = Request::Apply {
+            header: Header {
+                version: 1,
+                session: id,
+                sequence: 2,
+            },
+            plan,
+        };
+        assert!(matches!(
+            s.request(&peer(), &r.encode().unwrap(), &mut snapshot)
+                .unwrap()
+                .result,
+            ReplyResult::Applied
+        ));
+        s.backend.fail_delete = true;
+        assert!(matches!(s.invalidated(1), Err(Error::Cleanup)));
+        let new_peer = PeerIdentity {
+            connection: 2,
+            ..peer()
+        };
+        let header = Header {
+            version: 1,
+            session: SessionId::new(),
+            sequence: 1,
+        };
+        assert!(matches!(
+            s.request(
+                &new_peer,
+                &Request::Status { header }.encode().unwrap(),
+                &mut snapshot
+            )
+            .unwrap()
+            .result,
+            ReplyResult::Status {
+                active: false,
+                cleanup_required: true
+            }
+        ));
+        rejected(s.request(
+            &new_peer,
+            &request(1, SessionId::new()).encode().unwrap(),
+            &mut snapshot,
+        ));
+        s.backend.fail_delete = false;
+        let wrong_peer = PeerIdentity {
+            uid: 502,
+            ..new_peer.clone()
+        };
+        rejected(s.request(
+            &wrong_peer,
+            &Request::Clear { header }.encode().unwrap(),
+            &mut snapshot,
+        ));
+        assert_eq!(s.backend.routes.len(), 1);
+        assert!(matches!(
+            s.request(
+                &new_peer,
+                &Request::Clear { header }.encode().unwrap(),
+                &mut snapshot
+            )
+            .unwrap()
+            .result,
+            ReplyResult::Cleared
+        ));
+        assert!(s.backend.routes.is_empty());
+        assert!(!s.has_open_session());
+    }
     #[test]
     fn invalidation_cleans_only_its_bound_connection() {
         let (_dir, mut s) = service();

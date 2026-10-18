@@ -342,3 +342,27 @@ bytes charged physical footprint (31.3 MiB), 97,796,096 bytes RSS (93.3 MiB), an
 on-demand helper was not running. Tray startup and first Settings frame callbacks
 were 146.562 ms and 146.872 ms for this launch. These are single-launch observations,
 not a replacement for the deferred full resource and lifecycle matrix.
+
+### PR review corrections (2026-10-18)
+
+- Failed connection-invalidation cleanup now releases the dead binding while
+  retaining the durable route journal. A new authenticated client can read
+  Status and retry Clear; Begin remains blocked until reconciliation completes.
+- Shared route attestation rejects existing `/0` or `/1` routes on interfaces
+  other than the physical interface, including VPN half-default routes that
+  override a physical default even when the VPN endpoint stays physical.
+- Settings keeps the submitted draft and editor text until save completion.
+  A newer revision replaces the editor only when the draft still matches that
+  submission or has no unsaved edits. Newer edits remain available to save.
+- The local installer uses one staging directory for the bundle, previous app,
+  and launchd plist, so its exit trap cleans the entire staging tree.
+
+Fresh validation: `cargo test --release` passed 73 tests (one subprocess fixture
+ignored); the recovery, half-default routing and save-edit regressions were
+observed failing before their fixes. Release Clippy, formatting, shell syntax,
+and diff whitespace checks passed. The upstream `block 0.1.6` dependency still
+reports a future Rust incompatibility warning. macOS packaging and signature /
+tamper checks passed; Windows release binaries cross-compiled successfully.
+These corrections have not been installed or exercised with live VPN routes.
+Windows VPN integration remains deferred; successful cross-compilation does not
+qualify its currently unsupported platform operations.

@@ -139,6 +139,10 @@ pub fn build_plan(
     if network.vpn.index == network.physical.index
         || network.default_interface_id != network.physical.index
         || network.endpoint_interface_id != network.physical.index
+        || network
+            .existing_routes
+            .iter()
+            .any(|route| route.prefix <= 1 && route.interface_id != network.physical.index)
     {
         return Err(Error::Conflict);
     }
@@ -269,6 +273,23 @@ pub(crate) mod tests {
                 gateway: None,
             }],
             warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn rejects_vpn_catch_all_routes_despite_physical_default_and_endpoint() {
+        for destination in ["0.0.0.0", "128.0.0.0"] {
+            let mut network = snapshot();
+            network.existing_routes.push(Route {
+                destination: destination.parse().unwrap(),
+                prefix: 1,
+                interface_id: network.vpn.index,
+                gateway: None,
+            });
+            assert!(matches!(
+                build_plan(&config("198.51.100.7"), &network, &[]),
+                Err(Error::Conflict)
+            ));
         }
     }
 
