@@ -395,7 +395,7 @@ impl Render for Settings {
             .id("profiles")
             .role(accesskit::Role::Group)
             .aria_label("Saved VPN profiles")
-            .h(px(84.))
+            .max_h(px(180.))
             .flex_shrink_0()
             .overflow_y_scroll()
             .flex()
@@ -420,19 +420,22 @@ impl Render for Settings {
                     ""
                 }
             );
-            profiles = profiles.child(button(
-                ("profile", index),
-                label,
-                busy || live.state != SessionState::Disconnected,
-                move |_, cx| {
-                    this.update(cx, |this, cx| {
-                        this.draft.profile_id = Some(id.clone());
-                        this.dirty = true;
-                        this.error = None;
-                        cx.notify();
-                    })
-                },
-            ));
+            profiles = profiles.child(
+                button(
+                    ("profile", index),
+                    label,
+                    busy || live.state != SessionState::Disconnected,
+                    move |_, cx| {
+                        this.update(cx, |this, cx| {
+                            this.draft.profile_id = Some(id.clone());
+                            this.dirty = true;
+                            this.error = None;
+                            cx.notify();
+                        })
+                    },
+                )
+                .flex_shrink_0(),
+            );
         }
         let reload = button("reload-profiles", "Reload profiles", busy, |_, cx| {
             tray::send(cx, Command::ReloadProfiles)
