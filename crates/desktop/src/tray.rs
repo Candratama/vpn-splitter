@@ -331,17 +331,5 @@ fn finish_quit(cx: &mut App) {
 }
 
 fn icon() -> gpui_tray::Result<Icon> {
-    const SIZE: u32 = 32;
-    let mut rgba = vec![0; (SIZE * SIZE * 4) as usize];
-    for y in 5..27 {
-        for x in 7..25 {
-            let border = y == 5 || x == 7 || x == 24 || y == 26;
-            let check = (10..16).contains(&x) && y == x + 7 || (15..23).contains(&x) && y == 37 - x;
-            if border || check {
-                let offset = ((y * SIZE + x) * 4) as usize;
-                rgba[offset..offset + 4].copy_from_slice(&[45, 90, 70, 255]);
-            }
-        }
-    }
-    Icon::from_rgba(rgba, SIZE, SIZE)
+    Icon::from_rgba(include_bytes!("../assets/menubar-icon.rgba").to_vec(), 18, 18)
 }

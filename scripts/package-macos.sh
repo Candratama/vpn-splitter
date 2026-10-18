@@ -17,6 +17,8 @@ with tempfile.TemporaryDirectory(dir=output.parent, prefix='vpn-bundle-') as sta
     (contents / 'Library/LaunchDaemons').mkdir(parents=True)
     (contents / 'Resources').mkdir()
     shutil.copy2('packaging/macos/install-local.sh', contents / 'Resources/install-local.sh')
+    shutil.copy2('crates/desktop/assets/AppIcon.icns', contents / 'Resources/AppIcon.icns')
+    shutil.copy2('crates/desktop/assets/HUGEICONS-LICENSE.md', contents / 'Resources/HUGEICONS-LICENSE.md')
     for name in ('vpn-splitter-desktop', 'vpn-splitter-helper'):
         shutil.copy2(Path('target/release') / name, contents / 'MacOS' / name)
     shutil.copy2('packaging/macos/com.candratama.vpnsplitter.helper.plist',
@@ -26,6 +28,7 @@ with tempfile.TemporaryDirectory(dir=output.parent, prefix='vpn-bundle-') as sta
         'CFBundleName': 'VPN Splitter',
         'CFBundleDisplayName': 'VPN Splitter',
         'CFBundleExecutable': 'vpn-splitter-desktop',
+        'CFBundleIconFile': 'AppIcon',
         'CFBundlePackageType': 'APPL',
         'CFBundleVersion': '1',
         'CFBundleShortVersionString': '0.1.0',
