@@ -327,3 +327,18 @@ Verified on this Mac:
 Still unqualified: full reboot/sleep/network-switch/crash matrix, VoiceOver manual
 review, login-at-startup behavior, developer-signed distribution and Windows.
 Earlier prototype memory numbers are not substituted for the real UI measurement.
+
+### Final installed build confirmation
+
+The final local update completed through macOS approval. Both installed executable
+hashes match the packaged build. Its persisted 100-rule configuration connected
+Moratel and displayed Routing Active; native readback found all 72 expected unique
+routes, with none missing. The physical default remained unchanged and public
+GitHub HTTPS returned 200. The app was left connected for local use.
+
+A 10.092-second disconnected idle sample with Settings open measured 32,834,496
+bytes charged physical footprint (31.3 MiB), 97,796,096 bytes RSS (93.3 MiB), and
+0.0031% CPU of one core. This short sample covers the desktop process only; the
+on-demand helper was not running. Tray startup and first Settings frame callbacks
+were 146.562 ms and 146.872 ms for this launch. These are single-launch observations,
+not a replacement for the deferred full resource and lifecycle matrix.
