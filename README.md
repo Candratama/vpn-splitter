@@ -53,3 +53,50 @@ The tests mock operating system commands and do not change the Mac's routing:
 ```sh
 bash test_vpn_splitter.sh
 ```
+
+## GPUI desktop app (macOS preview)
+
+Build the menu bar app on Apple Silicon with Xcode and Rust 1.97.1:
+
+```sh
+./scripts/package-macos.sh
+open "target/release/VPN Splitter.app"
+```
+
+Open **VPN → Settings**, select a saved L2TP profile, enter or import destination
+IPv4 addresses/CIDRs/hostnames, then Save. Disable **Send all traffic** in the
+macOS VPN profile first. Configuration stays in your local Application Support
+folder; the app does not import the CLI's private configuration automatically.
+
+The UI includes Connect/Disconnect, routing status, cleanup retry and diagnostics.
+For local use without an Apple Developer account:
+
+1. Choose **Install / approve helper…** and approve the macOS administrator dialog.
+2. The exact local build is installed under
+   `/Library/PrivilegedHelperTools/VPN Splitter.app`; the preview quits and the
+   installed app opens automatically.
+3. Select your saved VPN, Save the destination list, then **Connect VPN**.
+   VPN connection and active routing are shown separately. Use Disconnect before
+   removing the helper; Quit also cleans up app-owned routes.
+
+The local helper accepts only the installed build's exact code hash from the
+active console user. Both executables and their path are protected by root
+ownership. This local build is ad-hoc signed, not Apple developer signed or
+notarized. Building/opening the preview does not install the privileged service.
+Local install/update, saved L2TP Connect/Apply, Disconnect and Quit have been
+exercised on this Mac with physical internet preserved. Public HTTPS and an office
+server were reachable. See desktop validation for remaining qualification checks.
+
+**Remove helper…** unloads the service and checks owned-route cleanup. Failed cleanup
+retains the service files and journal for retry. Removal preserves the app, OS VPN
+profiles, credentials and user configuration. For updates, quit the installed app and run Install / approve from the new
+preview. Replacement requires admin approval and refuses to continue if owned-route
+cleanup fails.
+
+For developer-signed packaging, set `VPN_SPLITTER_SIGN_IDENTITY` in your local build
+environment. The script signs the embedded helper first, then the app. No
+notarization upload or publication is performed.
+
+Windows support and further performance/accessibility qualification are deferred
+while the macOS product is completed. See [desktop validation](docs/desktop-validation.md)
+for measured results and incomplete checks.

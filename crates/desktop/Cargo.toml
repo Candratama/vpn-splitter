@@ -1,0 +1,33 @@
+[package]
+name = "vpn-splitter-desktop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+accesskit = "0.24"
+unicode-segmentation = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-channel = "2"
+vpn-splitter-core = { path = "../core" }
+vpn-splitter-helper = { path = "../helper" }
+
+gpui = { version = "=0.2.2", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "8166e3d7b8b42d8aaf4d4dee7fcd25ab4ec65105", features = ["font-kit"] }
+gpui-tray = { version = "=0.1.4", features = ["menu-state"] }
+raw-window-handle = { version = "0.6", features = ["std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSRunningApplication", "NSView", "NSWindow"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

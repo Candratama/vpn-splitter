@@ -20,3 +20,9 @@
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# Desktop build outputs and per-plan execution evidence.
+/target/
+/.superpowers/
+/dist/
+__pycache__/
