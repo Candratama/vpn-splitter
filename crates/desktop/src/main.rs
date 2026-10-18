@@ -16,7 +16,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let started = std::time::Instant::now();
     let directory = application_directory()?;
     std::fs::create_dir_all(&directory)?;
-    let Some(_instance) = SingleInstance::acquire(&directory.join("desktop.lock"))? else {
+    let relaunch = std::env::args().any(|arg| arg == "--relaunch");
+    let instance = loop {
+        let instance = SingleInstance::acquire(&directory.join("desktop.lock"))?;
+        if instance.is_some() || !relaunch || started.elapsed() > std::time::Duration::from_secs(3)
+        {
+            break instance;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let Some(_instance) = instance else {
         focus::open_existing(&directory)?;
         return Ok(());
     };
@@ -53,12 +62,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("Cannot create VPN Splitter tray: {error}");
             cx.quit();
         } else {
+            if relaunch {
+                cx.defer(tray::open_settings);
+            }
             eprintln!(
                 "tray_ready_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0
             );
         }
     });
+    drop(_focus_server);
+    drop(_instance);
     Ok(())
 }
 

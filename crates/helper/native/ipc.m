@@ -5,6 +5,10 @@
 #include <stdatomic.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/acl.h>
+#include <mach-o/dyld.h>
+#include <limits.h>
 #import <IOKit/pwr_mgt/IOPMLib.h>
 #import <IOKit/IOMessage.h>
 #include "native.h"
@@ -14,15 +18,104 @@
 
 typedef int (*VSRequest)(void *,uint32_t,uint64_t,const char *,const uint8_t *,size_t,uint8_t *,size_t,size_t *);
 typedef void (*VSInvalidated)(void *,uint64_t);
+typedef int (*VSNetworkCheck)(void *);
 @protocol VSProtocol
 - (void)exchange:(NSData *)data reply:(void (^)(NSData *,int))reply;
 @end
+// Local builds are trusted only after an administrator installs this exact pair
+// under a root-owned path. Never derive peer identity from a user-writable bundle.
+#define VS_LOCAL_APP @"/Library/PrivilegedHelperTools/VPN Splitter.app"
+static BOOL writable_acl(NSString *path) {
+    acl_t acl=acl_get_file(path.fileSystemRepresentation,ACL_TYPE_EXTENDED);
+    if(!acl)return errno!=ENOENT && errno!=ENOTSUP;
+    acl_entry_t entry;int index=ACL_FIRST_ENTRY;BOOL writable=NO;
+    while(acl_get_entry(acl,index,&entry)==0) {
+        index=ACL_NEXT_ENTRY;acl_tag_t tag;acl_permset_t permissions;
+        if(acl_get_tag_type(entry,&tag)!=0 || acl_get_permset(entry,&permissions)!=0){writable=YES;break;}
+        if(tag!=ACL_EXTENDED_ALLOW)continue;
+        acl_perm_t mutations[]={ACL_WRITE_DATA,ACL_APPEND_DATA,ACL_DELETE,ACL_DELETE_CHILD,ACL_WRITE_ATTRIBUTES,ACL_WRITE_EXTATTRIBUTES,ACL_WRITE_SECURITY,ACL_CHANGE_OWNER};
+        for(NSUInteger n=0;n<sizeof(mutations)/sizeof(mutations[0]);n++)if(acl_get_perm_np(permissions,mutations[n])==1){writable=YES;break;}
+        if(writable)break;
+    }
+    acl_free(acl);return writable;
+}
+static BOOL protected_path(NSString *path) {
+    NSString *component=@"/";
+    NSArray *parts=path.pathComponents;
+    for(NSUInteger index=1;index<parts.count;index++) {
+        component=[component stringByAppendingPathComponent:parts[index]];
+        struct stat info;
+        if(lstat(component.fileSystemRepresentation,&info)!=0 || info.st_uid!=0 ||
+           (info.st_mode&0022)!=0 || S_ISLNK(info.st_mode) || writable_acl(component) ||
+           (index+1<parts.count && !S_ISDIR(info.st_mode)))return NO;
+    }
+    return YES;
+}
+static NSString *hash_requirement(NSString *path,NSString *identifier) {
+    if(!protected_path(path))return nil;
+    SecStaticCodeRef code=NULL;CFDictionaryRef raw=NULL;
+    if(SecStaticCodeCreateWithPath((__bridge CFURLRef)[NSURL fileURLWithPath:path],kSecCSDefaultFlags,&code)!=errSecSuccess)return nil;
+    OSStatus result=SecStaticCodeCheckValidity(code,kSecCSStrictValidate,NULL);
+    if(result==errSecSuccess)result=SecCodeCopySigningInformation(code,kSecCSSigningInformation,&raw);
+    CFRelease(code);if(result!=errSecSuccess)return nil;
+    NSDictionary *info=CFBridgingRelease(raw);
+    NSData *hash=info[(__bridge NSString*)kSecCodeInfoUnique];
+    if(![info[(__bridge NSString*)kSecCodeInfoIdentifier] isEqual:identifier] || hash.length!=20)return nil;
+    NSMutableString *hex=[NSMutableString string];
+    const uint8_t *bytes=hash.bytes;
+    for(NSUInteger index=0;index<hash.length;index++)[hex appendFormat:@"%02x",bytes[index]];
+    return [NSString stringWithFormat:@"identifier \"%@\" and cdhash H\"%@\"",identifier,hex];
+}
+static NSString *local_requirement(NSString *identifier) {
+    char executable[PATH_MAX];uint32_t size=sizeof(executable);
+    if(_NSGetExecutablePath(executable,&size)!=0)return nil;
+    NSString *current=[NSString stringWithUTF8String:executable];
+    NSString *desktop=[VS_LOCAL_APP stringByAppendingPathComponent:@"Contents/MacOS/vpn-splitter-desktop"];
+    NSString *helper=[VS_LOCAL_APP stringByAppendingPathComponent:@"Contents/MacOS/vpn-splitter-helper"];
+    NSString *own_id=[current isEqual:desktop]?VS_APP:([current isEqual:helper]?VS_SERVICE:nil);
+    if(!own_id)return nil;
+    NSString *own_requirement=hash_requirement(current,own_id);
+    if(!own_requirement)return nil;
+    SecRequirementRef required=NULL;SecCodeRef own=NULL;
+    if(SecRequirementCreateWithString((__bridge CFStringRef)own_requirement,kSecCSDefaultFlags,&required)!=errSecSuccess)return nil;
+    OSStatus valid=SecCodeCopySelf(kSecCSDefaultFlags,&own);
+    if(valid==errSecSuccess)valid=SecCodeCheckValidity(own,kSecCSDefaultFlags,required);
+    if(own)CFRelease(own);CFRelease(required);if(valid!=errSecSuccess)return nil;
+    return hash_requirement([identifier isEqual:VS_APP]?desktop:helper,identifier);
+}
+int vs_local_policy_probe(void) { @autoreleasepool {
+    if(protected_path(@"/tmp") || protected_path(@"/private/tmp"))return 1;
+    if(!protected_path(@"/Library/PrivilegedHelperTools"))return 2;
+    if(hash_requirement(@"/usr/bin/true",@"wrong.identifier"))return 3;
+    if(local_requirement(@"wrong.identifier"))return 4;
+    return 0;
+}}
+static int local_setup(BOOL removing) {
+    if(!protected_path(@"/Library/PrivilegedHelperTools") || !protected_path(@"/Library/LaunchDaemons"))return EACCES;
+    SecCodeRef code=NULL;CFDictionaryRef raw=NULL;
+    if(SecCodeCopySelf(kSecCSDefaultFlags,&code)!=errSecSuccess)return EACCES;
+    OSStatus status=SecCodeCopySigningInformation(code,kSecCSSigningInformation,&raw);CFRelease(code);
+    if(status!=errSecSuccess)return EACCES;
+    NSDictionary *info=CFBridgingRelease(raw);NSData *hash=info[(__bridge NSString*)kSecCodeInfoUnique];
+    if(hash.length!=20)return EACCES;
+    NSMutableString *hex=[NSMutableString string];const uint8_t *bytes=hash.bytes;
+    for(NSUInteger index=0;index<hash.length;index++)[hex appendFormat:@"%02x",bytes[index]];
+    static const char bootstrap[]=
+#include "local-bootstrap.h"
+    ;
+    NSTask *task=[NSTask new];task.executableURL=[NSURL fileURLWithPath:@"/usr/bin/osascript"];
+    task.arguments=@[@"-e",@"on run argv\n do shell script (\"/bin/bash -c \" & quoted form of (item 1 of argv) & \" -- \" & quoted form of (item 2 of argv) & \" \" & quoted form of (item 3 of argv) & \" \" & quoted form of (item 4 of argv)) with administrator privileges\nend run",@(bootstrap),NSBundle.mainBundle.bundlePath,hex,removing?@"remove":@"install"];
+    task.standardOutput=[NSFileHandle fileHandleWithNullDevice];
+    task.standardError=[NSFileHandle fileHandleWithNullDevice];
+    NSError *error=nil;if(![task launchAndReturnError:&error])return EACCES;
+    [task waitUntilExit];return task.terminationStatus==0?0:EACCES;
+}
 static NSString *self_requirement(NSString *identifier) {
     SecCodeRef code=NULL;if(SecCodeCopySelf(kSecCSDefaultFlags,&code)!=errSecSuccess)return nil;
     CFDictionaryRef raw=NULL;OSStatus result=SecCodeCopySigningInformation(code,kSecCSSigningInformation,&raw);CFRelease(code);
     if(result!=errSecSuccess)return nil;
     NSDictionary *info=CFBridgingRelease(raw);NSString *team=info[(__bridge NSString*)kSecCodeInfoTeamIdentifier];
-    if(!team || team.length!=10 || [team rangeOfCharacterFromSet:[[NSCharacterSet alphanumericCharacterSet] invertedSet]].location!=NSNotFound)return nil;
+    if(!team || team.length!=10 || [team rangeOfCharacterFromSet:[[NSCharacterSet alphanumericCharacterSet] invertedSet]].location!=NSNotFound)return local_requirement(identifier);
     return [NSString stringWithFormat:@"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",identifier,team];
 }
 uint32_t vs_console_uid(void) {
@@ -55,6 +148,7 @@ int vs_code_requirement(uint8_t *out,size_t capacity,size_t *length) { @autorele
 }
 @end
 @interface VSListener:NSObject<NSXPCListenerDelegate>
+@property VSNetworkCheck network_check;
 @property VSRequest callback;
 @property VSInvalidated invalidated;
 @property void *context;
@@ -111,12 +205,16 @@ int vs_monitor(int active) {
 }
 static void network_changed(SCDynamicStoreRef store,CFArrayRef keys,void *context) {
     (void)store;(void)keys;VSListener *listener=(__bridge VSListener*)context;
-    @synchronized(listener.connections){for(NSXPCConnection *connection in listener.connections.copy)[connection invalidate];}
+    dispatch_async(listener.queue,^{
+        BOOL valid=listener.network_check && listener.network_check(listener.context)==0;
+        uint32_t console=vs_console_uid();
+        @synchronized(listener.connections){for(NSXPCConnection *connection in listener.connections.copy)if(!valid || connection.effectiveUserIdentifier!=console)[connection invalidate];}
+    });
 }
-int vs_serve(void *context,VSRequest request,VSInvalidated invalidated) { @autoreleasepool {
+int vs_serve(void *context,VSRequest request,VSInvalidated invalidated,VSNetworkCheck network_check) { @autoreleasepool {
     if(geteuid()!=0)return EACCES;
     NSString *requirement=self_requirement(VS_APP);if(!requirement)return EACCES;
-    VSListener *delegate=[VSListener new];delegate.context=context;delegate.callback=request;delegate.invalidated=invalidated;delegate.requirement=requirement;delegate.queue=dispatch_queue_create("com.candratama.vpnsplitter.routes",DISPATCH_QUEUE_SERIAL);delegate.connections=[NSMutableSet set];
+    VSListener *delegate=[VSListener new];delegate.context=context;delegate.callback=request;delegate.invalidated=invalidated;delegate.network_check=network_check;delegate.requirement=requirement;delegate.queue=dispatch_queue_create("com.candratama.vpnsplitter.routes",DISPATCH_QUEUE_SERIAL);delegate.connections=[NSMutableSet set];
     NSXPCListener *listener=[[NSXPCListener alloc]initWithMachServiceName:VS_SERVICE];[listener setConnectionCodeSigningRequirement:requirement];listener.delegate=delegate;
     SCDynamicStoreContext observer_context={0,(__bridge void*)delegate,NULL,NULL,NULL};
     SCDynamicStoreRef store=SCDynamicStoreCreate(NULL,CFSTR("VPN Splitter helper"),network_changed,&observer_context);
@@ -125,15 +223,34 @@ int vs_serve(void *context,VSRequest request,VSInvalidated invalidated) { @autor
     [listener activate];[[NSRunLoop currentRunLoop]run];
     [listener invalidate];SCDynamicStoreSetDispatchQueue(store,NULL);monitoring_store=NULL;CFRelease(store);return 0;
 }}
+typedef void (*VSClientLost)(void *);
+@interface VSClient:NSObject
+@property NSXPCConnection *connection;
+@property dispatch_queue_t queue;
+@property VSClientLost lost;
+@property void *context;
+@property BOOL stopped;
+@end
+@implementation VSClient
+@end
 void *vs_client_create(void) { @autoreleasepool {
     NSString *requirement=self_requirement(VS_SERVICE);if(!requirement)return NULL;
+    VSClient *client=[VSClient new];client.queue=dispatch_queue_create("com.candratama.vpnsplitter.helper-events",DISPATCH_QUEUE_SERIAL);
     NSXPCConnection *connection=[[NSXPCConnection alloc]initWithMachServiceName:VS_SERVICE options:NSXPCConnectionPrivileged];
+    client.connection=connection;
+    __weak VSClient *weak=client;
+    connection.invalidationHandler=^{VSClient *strong=weak;if(strong)dispatch_async(strong.queue,^{if(!strong.stopped && strong.lost)strong.lost(strong.context);});};
+    connection.interruptionHandler=^{VSClient *strong=weak;if(strong)[strong.connection invalidate];};
     connection.remoteObjectInterface=[NSXPCInterface interfaceWithProtocol:@protocol(VSProtocol)];[connection setCodeSigningRequirement:requirement];[connection activate];
-    return (__bridge_retained void*)connection;
+    return (__bridge_retained void*)client;
 }}
+void vs_client_observe(void *pointer,void *context,VSClientLost callback) {
+    VSClient *client=(__bridge VSClient*)pointer;
+    dispatch_sync(client.queue,^{client.context=context;client.lost=callback;});
+}
 int vs_client_request(void *client,const uint8_t *bytes,size_t length,uint8_t *out,size_t capacity,size_t *out_length) { @autoreleasepool {
     if(!client || length>VS_LIMIT)return EINVAL;
-    NSXPCConnection *connection=(__bridge NSXPCConnection*)client;
+    NSXPCConnection *connection=((__bridge VSClient*)client).connection;
     dispatch_semaphore_t semaphore=dispatch_semaphore_create(0);NSObject *lock=[NSObject new];
     __block NSData *response=nil;__block int error=ETIMEDOUT;
     id<VSProtocol> proxy=[connection remoteObjectProxyWithErrorHandler:^(NSError *e){(void)e;@synchronized(lock){error=EIO;}dispatch_semaphore_signal(semaphore);}];
@@ -142,9 +259,14 @@ int vs_client_request(void *client,const uint8_t *bytes,size_t length,uint8_t *o
     @synchronized(lock){if(error)return error;if(!response || response.length>capacity)return EMSGSIZE;memcpy(out,response.bytes,response.length);*out_length=response.length;}
     return 0;
 }}
-void vs_client_close(void *client) {if(client){NSXPCConnection *connection=CFBridgingRelease(client);[connection invalidate];}}
+void vs_client_close(void *pointer) {
+    if(pointer){VSClient *client=CFBridgingRelease(pointer);
+        dispatch_sync(client.queue,^{client.stopped=YES;client.lost=NULL;client.context=NULL;});
+        [client.connection invalidate];
+    }
+}
 int vs_register_helper(int unregistering) { @autoreleasepool {
-    if(!self_requirement(VS_SERVICE))return EACCES;
+    if(local_requirement(VS_SERVICE) || !self_requirement(VS_SERVICE))return local_setup(unregistering!=0);
     SMAppService *service=[SMAppService daemonServiceWithPlistName:@"com.candratama.vpnsplitter.helper.plist"];
     NSError *error=nil;BOOL success=unregistering?[service unregisterAndReturnError:&error]:[service registerAndReturnError:&error];
     if(!success)return EACCES;
@@ -193,10 +315,28 @@ int vs_xpc_probe(void) { @autoreleasepool {
     return 0;
 }}
 int vs_helper_status(void) { @autoreleasepool {
+    if(local_requirement(VS_SERVICE))return protected_path(@"/Library/LaunchDaemons/com.candratama.vpnsplitter.helper.plist")?1:0;
     if(!self_requirement(VS_SERVICE))return -1;
     return (int)[SMAppService daemonServiceWithPlistName:@"com.candratama.vpnsplitter.helper.plist"].status;
 }}
 int vs_login(int enabled) { @autoreleasepool {
+    if(local_requirement(VS_SERVICE)) {
+        NSString *directory=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents"];
+        NSString *path=[directory stringByAppendingPathComponent:@"com.candratama.vpnsplitter.login.plist"];
+        NSDictionary *expected=@{@"Label":@"com.candratama.vpnsplitter.login",@"ProgramArguments":@[[VS_LOCAL_APP stringByAppendingPathComponent:@"Contents/MacOS/vpn-splitter-desktop"]],@"RunAtLoad":@YES};
+        NSFileManager *files=NSFileManager.defaultManager;struct stat info;
+        if(lstat(path.fileSystemRepresentation,&info)==0) {
+            if(!S_ISREG(info.st_mode) || info.st_uid!=geteuid() || ![[NSDictionary dictionaryWithContentsOfFile:path]isEqual:expected])return EEXIST;
+            if(!enabled)return [files removeItemAtPath:path error:nil]?0:EIO;
+            return 0;
+        }
+        if(errno!=ENOENT)return EIO;
+        if(!enabled)return 0;
+        if(![files createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil])return EIO;
+        NSData *data=[NSPropertyListSerialization dataWithPropertyList:expected format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
+        if(!data || ![data writeToFile:path options:NSDataWritingAtomic error:nil])return EIO;
+        return [files setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:path error:nil]?0:EIO;
+    }
     if(!self_requirement(VS_SERVICE))return EACCES;
     SMAppService *service=SMAppService.mainAppService;NSError *error=nil;
     if(enabled && service.status==SMAppServiceStatusEnabled)return 0;

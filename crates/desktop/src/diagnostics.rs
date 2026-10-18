@@ -32,6 +32,7 @@ mod tests {
             supported: true,
             split_enabled: true,
             connected: false,
+            transitioning: false,
         });
         let redacted = export(&view, false).unwrap();
         for secret in [

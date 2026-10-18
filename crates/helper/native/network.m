@@ -139,9 +139,11 @@ int vs_profiles(uint8_t *out,size_t capacity,size_t *length) { @autoreleasepool 
         if(!interface || !CFEqual(SCNetworkInterfaceGetInterfaceType(interface),kSCNetworkInterfaceTypePPP))continue;
         NSString *identifier=(__bridge NSString*)SCNetworkServiceGetServiceID(service);
         SCNetworkConnectionRef connection=SCNetworkConnectionCreateWithServiceID(NULL,(__bridge CFStringRef)identifier,NULL,NULL);
-        BOOL connected=connection && SCNetworkConnectionGetStatus(connection)==kSCNetworkConnectionConnected;
+        SCNetworkConnectionStatus status=connection?SCNetworkConnectionGetStatus(connection):kSCNetworkConnectionInvalid;
+        BOOL connected=status==kSCNetworkConnectionConnected;
+        BOOL transitioning=status!=kSCNetworkConnectionConnected && status!=kSCNetworkConnectionDisconnected;
         if(connection)CFRelease(connection);
-        [profiles addObject:@{@"id":identifier,@"name":(__bridge NSString*)SCNetworkServiceGetName(service)?:@"VPN",@"supported":@(supported(service)),@"split_enabled":@(split(service)),@"connected":@(connected)}];
+        [profiles addObject:@{@"id":identifier,@"name":(__bridge NSString*)SCNetworkServiceGetName(service)?:@"VPN",@"supported":@(supported(service)),@"split_enabled":@(split(service)),@"connected":@(connected),@"transitioning":@(transitioning)}];
     }
     CFRelease(prefs);return output_json(profiles,out,capacity,length);
 }}
@@ -153,6 +155,10 @@ static uint32_t interface_ip(uint32_t index) {
     freeifaddrs(list);return result;
 }
 static NSDictionary *route_json(VSRoute route) {return @{@"destination":ip_string(route.destination),@"prefix":@(route.prefix),@"interface_id":@(route.interface_id),@"gateway":route.has_gateway?ip_string(route.gateway):(id)[NSNull null]};}
+static NSNumber *usable_dns(NSDictionary *dns) { return [NSNumber numberWithBool:[dns[@"ServerAddresses"] count]>0]; }
+int vs_snapshot_boolean_probe(uint8_t *out,size_t capacity,size_t *length) {
+    return output_json(@{@"dns_usable":usable_dns(@{@"ServerAddresses":@[@"192.0.2.53"]})},out,capacity,length);
+}
 int vs_snapshot(const char *profile,uint8_t *out,size_t capacity,size_t *length) { @autoreleasepool {
     NSString *identifier=@(profile);SCPreferencesRef prefs=SCPreferencesCreate(NULL,CFSTR("VPN Splitter"),NULL);if(!prefs)return EIO;
     SCNetworkServiceRef service=service_with_id(identifier,prefs);if(!service){CFRelease(prefs);return ENOENT;}
@@ -176,17 +182,31 @@ int vs_snapshot(const char *profile,uint8_t *out,size_t capacity,size_t *length)
     NSDictionary *dns=store?CFBridgingRelease(SCDynamicStoreCopyValue(store,CFSTR("State:/Network/Global/DNS"))):nil;
     uint32_t vpn_ip=interface_ip(vpn),physical_ip=interface_ip(physical.interface_id);
     NSDictionary *snapshot=nil;
-    if(!error && vpn_ip && physical_ip && found_endpoint) snapshot=@{@"profile_id":identifier,@"profile_exists":@YES,@"supported":@YES,@"split_enabled":@YES,@"vpn":@{@"index":@(vpn),@"address":ip_string(vpn_ip),@"gateway":[NSNull null]},@"physical":@{@"index":@(physical.interface_id),@"address":ip_string(physical_ip),@"gateway":ip_string(physical.gateway)},@"default_interface_id":@(physical.interface_id),@"vpn_endpoint":ip_string(endpoint),@"endpoint_interface_id":@(endpoint_route.interface_id),@"dns_usable":@([dns[@"ServerAddresses"] count]>0),@"existing_routes":existing};
+    if(!error && vpn_ip && physical_ip && found_endpoint) snapshot=@{@"profile_id":identifier,@"profile_exists":@YES,@"supported":@YES,@"split_enabled":@YES,@"vpn":@{@"index":@(vpn),@"address":ip_string(vpn_ip),@"gateway":[NSNull null]},@"physical":@{@"index":@(physical.interface_id),@"address":ip_string(physical_ip),@"gateway":ip_string(physical.gateway)},@"default_interface_id":@(physical.interface_id),@"vpn_endpoint":ip_string(endpoint),@"endpoint_interface_id":@(endpoint_route.interface_id),@"dns_usable":usable_dns(dns),@"existing_routes":existing};
     if(store)CFRelease(store);CFRelease(service);CFRelease(prefs);return error?error:output_json(snapshot,out,capacity,length);
 }}
+// All control calls come from the desktop's single OS worker. Keep the same
+// connection reference so Stop releases only this app's start request.
+static SCNetworkConnectionRef owned_connection=NULL;
+static NSString *owned_profile=NULL;
 int vs_vpn_control(const char *profile,int connect) { @autoreleasepool {
+    NSString *identifier=@(profile);
     if(connect) {
         SCPreferencesRef prefs=SCPreferencesCreate(NULL,CFSTR("VPN Splitter"),NULL);if(!prefs)return EIO;
-        SCNetworkServiceRef service=service_with_id(@(profile),prefs);
+        SCNetworkServiceRef service=service_with_id(identifier,prefs);
         BOOL valid=service && supported(service) && split(service);if(service)CFRelease(service);CFRelease(prefs);if(!valid)return ENOTSUP;
+        if(owned_connection) {
+            if(SCNetworkConnectionGetStatus(owned_connection)!=kSCNetworkConnectionDisconnected)return EEXIST;
+            CFRelease(owned_connection);owned_connection=NULL;owned_profile=nil;
+        }
+        SCNetworkConnectionRef connection=SCNetworkConnectionCreateWithServiceID(NULL,(__bridge CFStringRef)identifier,NULL,NULL);if(!connection)return ENOENT;
+        if(SCNetworkConnectionGetStatus(connection)!=kSCNetworkConnectionDisconnected){CFRelease(connection);return EEXIST;}
+        if(!SCNetworkConnectionStart(connection,NULL,FALSE)){CFRelease(connection);return EACCES;}
+        owned_connection=connection;owned_profile=identifier;return 0;
     }
-    SCNetworkConnectionRef connection=SCNetworkConnectionCreateWithServiceID(NULL,(__bridge CFStringRef)@(profile),NULL,NULL);if(!connection)return ENOENT;
-    Boolean success=connect?SCNetworkConnectionStart(connection,NULL,TRUE):SCNetworkConnectionStop(connection,TRUE);CFRelease(connection);return success?0:EACCES;
+    if(!owned_connection || ![owned_profile isEqual:identifier])return EEXIST;
+    if(SCNetworkConnectionGetStatus(owned_connection)==kSCNetworkConnectionDisconnected)return 0;
+    return SCNetworkConnectionStop(owned_connection,FALSE)?0:EACCES;
 }}
 
 typedef void (*VSNetworkCallback)(void *,uint32_t);

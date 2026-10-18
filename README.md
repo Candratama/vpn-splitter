@@ -69,16 +69,33 @@ macOS VPN profile first. Configuration stays in your local Application Support
 folder; the app does not import the CLI's private configuration automatically.
 
 The UI includes Connect/Disconnect, routing status, cleanup retry and diagnostics.
-**Automatic VPN/routing is not yet qualified for use.** It requires an authenticated
-privileged helper and an app/helper signed by the same Apple developer team.
-Unsigned local builds can edit configuration but cannot activate that helper.
-No helper is installed by building or opening the app.
+For local use without an Apple Developer account:
 
-For a signed build, set `VPN_SPLITTER_SIGN_IDENTITY` in your local build environment
-before running the packaging script. The script signs the embedded helper first,
-then the app. Signing is not notarization or proof of live VPN integration.
-Installation/admin approval and live route cleanup still require qualification on
-a controlled Mac. Keep using the CLI above for routing until that is complete.
+1. Choose **Install / approve helper…** and approve the macOS administrator dialog.
+2. The exact local build is installed under
+   `/Library/PrivilegedHelperTools/VPN Splitter.app`; the preview quits and the
+   installed app opens automatically.
+3. Select your saved VPN, Save the destination list, then **Connect VPN**.
+   VPN connection and active routing are shown separately. Use Disconnect before
+   removing the helper; Quit also cleans up app-owned routes.
+
+The local helper accepts only the installed build's exact code hash from the
+active console user. Both executables and their path are protected by root
+ownership. This local build is ad-hoc signed, not Apple developer signed or
+notarized. Building/opening the preview does not install the privileged service.
+Local install/update, saved L2TP Connect/Apply, Disconnect and Quit have been
+exercised on this Mac with physical internet preserved. Public HTTPS and an office
+server were reachable. See desktop validation for remaining qualification checks.
+
+**Remove helper…** unloads the service and checks owned-route cleanup. Failed cleanup
+retains the service files and journal for retry. Removal preserves the app, OS VPN
+profiles, credentials and user configuration. For updates, quit the installed app and run Install / approve from the new
+preview. Replacement requires admin approval and refuses to continue if owned-route
+cleanup fails.
+
+For developer-signed packaging, set `VPN_SPLITTER_SIGN_IDENTITY` in your local build
+environment. The script signs the embedded helper first, then the app. No
+notarization upload or publication is performed.
 
 Windows support and further performance/accessibility qualification are deferred
 while the macOS product is completed. See [desktop validation](docs/desktop-validation.md)

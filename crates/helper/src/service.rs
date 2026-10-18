@@ -64,7 +64,7 @@ fn attest(
     vpn: NetworkInterface,
     plan: Option<&vpn_splitter_core::routing::RoutePlan>,
     snapshot: &mut impl FnMut(&ProfileId, NetworkInterface) -> Result<NetworkSnapshot, Error>,
-) -> Result<(), Error> {
+) -> Result<NetworkSnapshot, Error> {
     use vpn_splitter_core::{
         config::{Config, Destination},
         routing::build_plan,
@@ -89,7 +89,7 @@ fn attest(
         ..Config::default()
     };
     build_plan(&config, &network, &[])?;
-    Ok(())
+    Ok(network)
 }
 impl<B: RouteBackend> Service<B> {
     pub fn recover(
@@ -101,9 +101,9 @@ impl<B: RouteBackend> Service<B> {
         if console_uid == 0 || requirement.is_empty() {
             return Err(Error::Permission);
         }
-        if !crate::journal::reconcile(&mut journal, &mut backend)?.complete() {
-            return Err(Error::Cleanup);
-        }
+        // Keep authenticated Status/Clear available even when startup cleanup
+        // cannot finish. Journal guards continue to block new route ownership.
+        let _ = crate::journal::reconcile(&mut journal, &mut backend);
         Ok(Self {
             journal,
             backend,
@@ -136,6 +136,9 @@ impl<B: RouteBackend> Service<B> {
             {
                 return Err(Error::Conflict);
             }
+            if self.journal.has_pending() || self.journal.requires_reconciliation() {
+                return Err(Error::Cleanup);
+            }
             attest(profile_id, *vpn_interface, None, snapshot)?;
             self.journal.begin(header.session)?;
             self.binding = Some(Binding {
@@ -152,14 +155,15 @@ impl<B: RouteBackend> Service<B> {
                 result: ReplyResult::Begun,
             });
         }
-        if self.binding.is_none()
-            && matches!(request, Request::Clear { .. })
-            && !self.journal.has_pending()
-        {
-            return Ok(Reply {
-                header,
-                result: ReplyResult::Cleared,
-            });
+        if self.binding.is_none() && matches!(request, Request::Clear { .. }) {
+            let result = match crate::journal::reconcile(&mut self.journal, &mut self.backend) {
+                Ok(report) if report.complete() => ReplyResult::Cleared,
+                _ => ReplyResult::Rejected {
+                    code: vpn_splitter_core::protocol::FaultCode::Cleanup,
+                    previous_plan_restored: false,
+                },
+            };
+            return Ok(Reply { header, result });
         }
         if self.binding.is_none() && matches!(request, Request::Status { .. }) {
             return Ok(Reply {
@@ -252,6 +256,25 @@ impl<B: RouteBackend> Service<B> {
         };
         Ok(Reply { header, result })
     }
+    pub fn network_is_valid(
+        &mut self,
+        snapshot: &mut impl FnMut(&ProfileId, NetworkInterface) -> Result<NetworkSnapshot, Error>,
+    ) -> bool {
+        let Some(binding) = self.binding.as_ref().filter(|binding| binding.open) else {
+            return true;
+        };
+        if self.journal.requires_reconciliation() {
+            return false;
+        }
+        let plan = self.journal.committed_plan();
+        attest(&binding.profile, binding.vpn, plan, snapshot).is_ok_and(|network| {
+            plan.is_none_or(|plan| {
+                plan.routes
+                    .iter()
+                    .all(|route| network.existing_routes.contains(route))
+            })
+        })
+    }
     pub fn has_open_session(&self) -> bool {
         self.binding.as_ref().is_some_and(|binding| binding.open)
             || self.journal.requires_reconciliation()
@@ -284,6 +307,7 @@ mod tests {
     struct Backend {
         routes: Vec<Route>,
         mutations: usize,
+        fail_delete: bool,
     }
     impl RouteBackend for Backend {
         fn read(&mut self, r: &Route) -> Result<Option<Route>, Error> {
@@ -299,6 +323,9 @@ mod tests {
             Ok(())
         }
         fn delete(&mut self, r: &Route) -> Result<(), Error> {
+            if self.fail_delete {
+                return Err(Error::Cleanup);
+            }
             self.mutations += 1;
             self.routes.retain(|v| v != r);
             Ok(())
@@ -364,6 +391,156 @@ mod tests {
     }
     fn rejected(result: Result<Reply, Error>) {
         assert!(result.is_err() || matches!(result.unwrap().result, ReplyResult::Rejected { .. }));
+    }
+    #[test]
+    fn delayed_network_event_keeps_valid_routes_and_rejects_lost_paths() {
+        let (_dir, mut service) = service();
+        let id = SessionId::new();
+        let begin = request(1, id);
+        service
+            .request(&peer(), &begin.encode().unwrap(), &mut snapshot)
+            .unwrap();
+        assert!(service.network_is_valid(&mut snapshot));
+        let Request::Begin {
+            profile_id,
+            vpn_interface,
+            ..
+        } = begin
+        else {
+            unreachable!()
+        };
+        let plan = RoutePlan {
+            profile_id,
+            vpn_interface,
+            routes: vec![Route {
+                destination: "198.51.100.7".parse().unwrap(),
+                prefix: 32,
+                interface_id: 9,
+                gateway: None,
+            }],
+            warnings: vec![],
+        };
+        service
+            .request(
+                &peer(),
+                &Request::Apply {
+                    header: Header {
+                        version: 1,
+                        session: id,
+                        sequence: 2,
+                    },
+                    plan,
+                }
+                .encode()
+                .unwrap(),
+                &mut snapshot,
+            )
+            .unwrap();
+        let routes = service.backend.routes.clone();
+        assert!(service.network_is_valid(&mut |p, v| {
+            let mut network = snapshot(p, v)?;
+            network.existing_routes = routes.clone();
+            Ok(network)
+        }));
+        assert!(!service.network_is_valid(&mut snapshot));
+        assert!(!service.network_is_valid(&mut |p, v| {
+            let mut network = snapshot(p, v)?;
+            network.default_interface_id = v.index;
+            Ok(network)
+        }));
+    }
+    #[test]
+    fn failed_startup_cleanup_keeps_status_and_clear_available() {
+        let (_dir, mut initial) = service();
+        let id = SessionId::new();
+        let begin = request(1, id);
+        initial
+            .request(&peer(), &begin.encode().unwrap(), &mut snapshot)
+            .unwrap();
+        let Request::Begin {
+            profile_id,
+            vpn_interface,
+            ..
+        } = begin
+        else {
+            unreachable!()
+        };
+        let plan = RoutePlan {
+            profile_id,
+            vpn_interface,
+            routes: vec![Route {
+                destination: "198.51.100.7".parse().unwrap(),
+                prefix: 32,
+                interface_id: 9,
+                gateway: None,
+            }],
+            warnings: vec![],
+        };
+        initial
+            .request(
+                &peer(),
+                &Request::Apply {
+                    header: Header {
+                        version: 1,
+                        session: id,
+                        sequence: 2,
+                    },
+                    plan,
+                }
+                .encode()
+                .unwrap(),
+                &mut snapshot,
+            )
+            .unwrap();
+        initial.backend.fail_delete = true;
+        let mut recovered = Service::recover(
+            initial.journal,
+            initial.backend,
+            501,
+            peer().verified_requirement,
+        )
+        .unwrap();
+        let header = Header {
+            version: 1,
+            session: SessionId::new(),
+            sequence: 1,
+        };
+        assert!(matches!(
+            recovered
+                .request(
+                    &peer(),
+                    &Request::Status { header }.encode().unwrap(),
+                    &mut snapshot
+                )
+                .unwrap()
+                .result,
+            ReplyResult::Status {
+                active: false,
+                cleanup_required: true
+            }
+        ));
+        assert!(
+            recovered
+                .request(
+                    &peer(),
+                    &request(1, SessionId::new()).encode().unwrap(),
+                    &mut snapshot
+                )
+                .is_err()
+        );
+        recovered.backend.fail_delete = false;
+        assert!(matches!(
+            recovered
+                .request(
+                    &peer(),
+                    &Request::Clear { header }.encode().unwrap(),
+                    &mut snapshot
+                )
+                .unwrap()
+                .result,
+            ReplyResult::Cleared
+        ));
+        assert!(recovered.backend.routes.is_empty());
     }
     #[test]
     fn unauthorized_peer_never_reaches_attestation_or_routes() {

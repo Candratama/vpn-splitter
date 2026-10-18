@@ -83,6 +83,7 @@ pub struct Profile {
     pub supported: bool,
     pub split_enabled: bool,
     pub connected: bool,
+    pub transitioning: bool,
 }
 pub fn list_profiles() -> Result<Vec<Profile>, Error> {
     json(|out, cap, len| unsafe { vs_profiles(out, cap, len) })
@@ -189,6 +190,7 @@ unsafe extern "C" {
             *mut usize,
         ) -> i32,
         invalidated: unsafe extern "C" fn(*mut std::ffi::c_void, u64),
+        network_check: unsafe extern "C" fn(*mut std::ffi::c_void) -> i32,
     ) -> i32;
     fn vs_monitor(active: i32) -> i32;
     fn vs_client_create() -> *mut std::ffi::c_void;
@@ -204,6 +206,7 @@ unsafe extern "C" {
     fn vs_register_helper(unregistering: i32) -> i32;
 }
 pub struct HelperClient {
+    observer: Option<Box<Box<dyn Fn() + Send + Sync>>>,
     connection: std::ptr::NonNull<std::ffi::c_void>,
 }
 // NSXPCConnection is thread-safe; this wrapper requires exclusive requests.
@@ -212,7 +215,32 @@ impl HelperClient {
     pub fn connect() -> Result<Self, Error> {
         let connection =
             std::ptr::NonNull::new(unsafe { vs_client_create() }).ok_or(Error::Permission)?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            observer: None,
+        })
+    }
+    pub fn observe_loss(&mut self, callback: impl Fn() + Send + Sync + 'static) {
+        unsafe extern "C" {
+            fn vs_client_observe(
+                client: *mut std::ffi::c_void,
+                context: *mut std::ffi::c_void,
+                callback: unsafe extern "C" fn(*mut std::ffi::c_void),
+            );
+        }
+        unsafe extern "C" fn lost(context: *mut std::ffi::c_void) {
+            let callback = unsafe { &*context.cast::<Box<dyn Fn() + Send + Sync>>() };
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback));
+        }
+        let mut callback: Box<Box<dyn Fn() + Send + Sync>> = Box::new(Box::new(callback));
+        unsafe {
+            vs_client_observe(
+                self.connection.as_ptr(),
+                (&mut *callback as *mut Box<dyn Fn() + Send + Sync>).cast(),
+                lost,
+            )
+        };
+        self.observer = Some(callback);
     }
     pub fn request(
         &mut self,
@@ -321,6 +349,61 @@ unsafe extern "C" fn invalidated(context: *mut std::ffi::c_void, connection: u64
         }
     }));
 }
+#[cfg(test)]
+mod local_install_tests {
+    #[test]
+    fn native_snapshot_dns_flag_is_a_json_boolean() {
+        unsafe extern "C" {
+            fn vs_snapshot_boolean_probe(out: *mut u8, capacity: usize, length: *mut usize) -> i32;
+        }
+        #[derive(serde::Deserialize)]
+        struct Flags {
+            dns_usable: bool,
+        }
+        let flags: Flags =
+            super::json(|out, cap, length| unsafe { vs_snapshot_boolean_probe(out, cap, length) })
+                .unwrap();
+        assert!(flags.dns_usable);
+    }
+    #[test]
+    fn local_trust_rejects_writable_paths_and_wrong_code_identity() {
+        unsafe extern "C" {
+            fn vs_local_policy_probe() -> i32;
+        }
+        assert_eq!(unsafe { vs_local_policy_probe() }, 0);
+    }
+    #[test]
+    fn uninstall_cleanup_requires_root() {
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(matches!(
+                super::cleanup_for_uninstall(),
+                Err(vpn_splitter_core::Error::Permission)
+            ));
+        }
+    }
+}
+pub fn cleanup_for_uninstall() -> Result<(), Error> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err(Error::Permission);
+    }
+    let path = std::path::Path::new("/Library/Application Support/VPN Splitter/owned-routes.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut journal = crate::journal::Journal::open(path)?;
+    if crate::journal::reconcile(&mut journal, &mut MacRouteBackend)?.complete() {
+        Ok(())
+    } else {
+        Err(Error::Cleanup)
+    }
+}
+unsafe extern "C" fn network_check(context: *mut std::ffi::c_void) -> i32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let service = unsafe { &mut *context.cast::<NativeService>() };
+        i32::from(!service.network_is_valid(&mut |profile, _| snapshot(profile)))
+    }))
+    .unwrap_or(1)
+}
 pub fn serve() -> Result<(), Error> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(Error::Permission);
@@ -358,6 +441,7 @@ pub fn serve() -> Result<(), Error> {
             (&mut *service as *mut NativeService).cast(),
             handle_request,
             invalidated,
+            network_check,
         )
     })
 }

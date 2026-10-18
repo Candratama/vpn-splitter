@@ -24,6 +24,13 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("shift-tab", PreviousField, Some("Settings")),
     ]);
 }
+fn connection_action_disabled(live: &controller::View, dirty: bool, awaiting_save: bool) -> bool {
+    live.preparing
+        || live.helper_busy
+        || live.state == SessionState::CleanupRequired
+        || (live.state == SessionState::Disconnected
+            && (!live.config_ready || live.config.profile_id.is_none() || dirty || awaiting_save))
+}
 pub struct Settings {
     pub page: Page,
     editor: Entity<TextInput>,
@@ -372,7 +379,8 @@ impl Render for Settings {
                 .child(button("copy-private","Copy with infrastructure (private)",private.is_none(),move|_,cx|{if let Some(text)=&private{cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));}})))
                 .child("Reports exclude infrastructure by default. An explicit private report includes profile names and destinations.");
         }
-        let busy = live.preparing
+        let busy = live.helper_busy
+            || live.preparing
             || !matches!(
                 live.state,
                 SessionState::Disconnected | SessionState::Active
@@ -387,7 +395,8 @@ impl Render for Settings {
             .id("profiles")
             .role(accesskit::Role::Group)
             .aria_label("Saved VPN profiles")
-            .max_h(px(110.))
+            .h(px(84.))
+            .flex_shrink_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -448,23 +457,34 @@ impl Render for Settings {
                 .child(button("save-rules",if live.state==SessionState::Active{"Save / Apply"}else{"Save"},busy||self.awaiting_save,move|window,cx|save.update(cx,|this,cx|this.save(&SaveSettings,window,cx)))))
             .child(button("launch-at-login",login_label,busy||live.state!=SessionState::Disconnected,move|_,cx|login.update(cx,|this,cx|{this.draft.launch_at_login = !this.draft.launch_at_login;this.dirty=true;cx.notify();})))
             .child(div().flex().gap_2()
-                .child(button("connect-vpn",if live.state==SessionState::Disconnected{"Connect VPN"}else if live.adopted{"Clear routes / keep VPN"}else{"Disconnect VPN"},live.preparing||self.dirty||self.awaiting_save||live.state==SessionState::CleanupRequired,move|_,cx|tray::send(cx,if live.state==SessionState::Disconnected{Command::Connect}else{Command::Disconnect})))
-                .child(button("retry-cleanup","Retry cleanup",live.state!=SessionState::CleanupRequired,|_,cx|tray::send(cx,Command::RetryCleanup))));
+                .child(button("connect-vpn",if live.state==SessionState::Disconnected{"Connect VPN"}else if live.adopted{"Clear routes / keep VPN"}else{"Disconnect VPN"},connection_action_disabled(&live, self.dirty, self.awaiting_save),move|_,cx|tray::send(cx,if live.state==SessionState::Disconnected{Command::Connect}else{Command::Disconnect})))
+                .child(button("retry-cleanup","Retry cleanup",live.helper_busy || (live.state!=SessionState::CleanupRequired && live.error!=Some(vpn_splitter_core::protocol::FaultCode::Cleanup)),|_,cx|tray::send(cx,Command::RetryCleanup))));
         let helper = match live.helper_status {
             -1 => {
-                "Helper: this unsigned build cannot manage VPN routes. A signed app/helper build is required."
+                "Helper: local setup required. Install / approve will request administrator permission and reopen the installed app."
             }
             0 => "Helper: not registered.",
-            1 => "Helper: enabled.",
+            1 => "Helper: installed.",
             2 => "Helper: approval required in System Settings.",
             _ => "Helper: bundle not installed.",
         };
-        root = root.child(div().text_sm().child(helper)).child(button(
-            "install-helper",
-            "Install / approve helper…",
-            live.state != SessionState::Disconnected,
-            |_, cx| tray::send(cx, Command::InstallHelper),
-        ));
+        root = root
+            .child(div().text_sm().child(helper))
+            .child(button(
+                "install-helper",
+                "Install / approve helper…",
+                live.state != SessionState::Disconnected || live.preparing || live.helper_busy,
+                |_, cx| tray::send(cx, Command::InstallHelper),
+            ))
+            .child(button(
+                "remove-helper",
+                "Remove helper…",
+                live.state != SessionState::Disconnected
+                    || live.preparing
+                    || live.helper_busy
+                    || live.helper_status != 1,
+                |_, cx| tray::send(cx, Command::RemoveHelper),
+            ));
         if let Some(error) = self
             .error
             .as_deref()
@@ -486,5 +506,23 @@ impl Render for Settings {
             root = root.child(div().text_sm().child(warning));
         }
         root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unsaved_edits_do_not_block_disconnect_or_cancel() {
+        let mut view = crate::controller::View::default();
+        for state in [
+            vpn_splitter_core::session::SessionState::Active,
+            vpn_splitter_core::session::SessionState::Connecting,
+            vpn_splitter_core::session::SessionState::Applying,
+        ] {
+            view.state = state;
+            assert!(!super::connection_action_disabled(&view, true, true));
+        }
+        view.state = vpn_splitter_core::session::SessionState::Disconnected;
+        assert!(super::connection_action_disabled(&view, true, false));
     }
 }

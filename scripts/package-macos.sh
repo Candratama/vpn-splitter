@@ -15,6 +15,8 @@ with tempfile.TemporaryDirectory(dir=output.parent, prefix='vpn-bundle-') as sta
     contents = bundle / 'Contents'
     (contents / 'MacOS').mkdir(parents=True)
     (contents / 'Library/LaunchDaemons').mkdir(parents=True)
+    (contents / 'Resources').mkdir()
+    shutil.copy2('packaging/macos/install-local.sh', contents / 'Resources/install-local.sh')
     for name in ('vpn-splitter-desktop', 'vpn-splitter-helper'):
         shutil.copy2(Path('target/release') / name, contents / 'MacOS' / name)
     shutil.copy2('packaging/macos/com.candratama.vpnsplitter.helper.plist',
@@ -43,6 +45,9 @@ if [[ -n "${VPN_SPLITTER_SIGN_IDENTITY:-}" ]]; then
     codesign --verify --deep --strict "$bundle"
     echo "Signed local bundle: $bundle (not notarized; integration qualification required)."
 else
-    echo "Unsigned local bundle: $bundle"
-    echo 'Settings works; VPN routing requires app/helper signed by the same Apple developer team.'
+    codesign --force --options runtime --sign - --identifier com.candratama.vpnsplitter.helper "$bundle/Contents/MacOS/vpn-splitter-helper"
+    codesign --force --options runtime --sign - "$bundle"
+    codesign --verify --deep --strict "$bundle"
+    echo "Ad-hoc signed local bundle: $bundle"
+    echo 'Install / approve helper requires administrator approval and installs the exact build under /Library/PrivilegedHelperTools.'
 fi

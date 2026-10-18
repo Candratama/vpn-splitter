@@ -15,7 +15,7 @@ use vpn_splitter_core::{
 fn selected_profile<'a>(profiles: &'a [Profile], id: Option<&str>) -> Result<&'a Profile, Error> {
     profiles
         .iter()
-        .find(|p| Some(p.id.as_str()) == id && p.supported && p.split_enabled)
+        .find(|p| Some(p.id.as_str()) == id && p.supported && p.split_enabled && !p.transitioning)
         .ok_or(Error::UnsupportedProfile)
 }
 fn native_event(state: SessionState, id: SessionId, kind: u32, now_ms: u64) -> Option<Event> {
@@ -42,10 +42,10 @@ fn native_event(state: SessionState, id: SessionId, kind: u32, now_ms: u64) -> O
             session: id,
             now_ms,
         }),
-        3 => Some(Event::NetworkChanged {
-            session: id,
-            now_ms,
-        }),
+        // VPN setup itself publishes network notifications. Fresh snapshot and
+        // helper attestation still validate the path before installing any route.
+        3 if state == SessionState::Active => Some(Event::Refresh { now_ms }),
+        3 => None,
         _ => None,
     }
 }
@@ -62,11 +62,29 @@ fn fault(error: &Error) -> FaultCode {
         Error::Io(_) => FaultCode::Io,
     }
 }
+// A directory fsync can fail after atomic replacement. Read back bytes before
+// deciding whether the new config is visible; route planning must use those bytes.
+fn visible_save_result(
+    path: &std::path::Path,
+    config: &Config,
+    result: Result<(), Error>,
+) -> Result<Option<FaultCode>, Error> {
+    match result {
+        Ok(()) => Ok(None),
+        Err(error) if path.is_file() && load_config(path).is_ok_and(|actual| actual == *config) => {
+            Ok(Some(fault(&error)))
+        }
+        Err(error) => Err(error),
+    }
+}
+fn persist_config(path: &std::path::Path, config: &Config) -> Result<Option<FaultCode>, Error> {
+    visible_save_result(path, config, save_config(path, config))
+}
 pub fn message(code: FaultCode) -> &'static str {
     match code {
         FaultCode::InvalidInput => "Check the profile and destination rules.",
         FaultCode::Permission => {
-            "Permission denied. A signed app/helper and saved OS VPN credentials are required."
+            "Permission denied or approval cancelled. Install the local helper and verify saved OS VPN credentials."
         }
         FaultCode::Timeout => "Operation timed out. Check VPN status or retry cleanup.",
         FaultCode::Conflict => {
@@ -76,9 +94,7 @@ pub fn message(code: FaultCode) -> &'static str {
             "Select a saved L2TP profile with Send all traffic disabled. The server must currently use a literal IPv4 address."
         }
         FaultCode::Dns => "A hostname has no usable IPv4 answer. Previous routes were preserved.",
-        FaultCode::Transport => {
-            "Cannot reach the signed helper. Install or approve it in System Settings."
-        }
+        FaultCode::Transport => "Cannot reach the helper. Install / approve it, then retry.",
         FaultCode::Cleanup => "Cleanup is incomplete. Keep the app open and choose Retry cleanup.",
         FaultCode::Io => {
             "Local file operation failed. Reload and check the saved configuration before retrying."
@@ -96,8 +112,10 @@ pub struct View {
     pub error: Option<FaultCode>,
     pub warnings: Vec<String>,
     pub helper_status: i32,
+    pub helper_busy: bool,
     pub quit_ready: bool,
     pub config_revision: u64,
+    pub config_ready: bool,
 }
 impl Default for View {
     fn default() -> Self {
@@ -111,8 +129,10 @@ impl Default for View {
             error: None,
             warnings: vec![],
             helper_status: -1,
+            helper_busy: false,
             quit_ready: false,
             config_revision: 0,
+            config_ready: false,
         }
     }
 }
@@ -124,6 +144,10 @@ pub enum Command {
     ReloadProfiles,
     Save(Config),
     InstallHelper,
+    RemoveHelper,
+    LocalInstalled,
+    HelperLost(SessionId),
+    Recovered(Result<(), FaultCode>),
     Quit,
     Event(Event),
     Native {
@@ -148,6 +172,8 @@ enum HelperJob {
     Preflight(SessionId, ProfileId, bool),
     Request(Request),
     Install,
+    Remove,
+    Recover,
     Close,
 }
 struct DnsJob {
@@ -178,7 +204,10 @@ fn run(
         ..View::default()
     };
     match load_config(&path) {
-        Ok(config) => view.config = config,
+        Ok(config) => {
+            view.config = config;
+            view.config_ready = true;
+        }
         Err(error) => view.error = Some(fault(&error)),
     }
     let mut session = Session::default();
@@ -214,11 +243,16 @@ fn run(
                     }),
                 },
                 OsJob::Disconnect(id, profile) => {
-                    let connected = platform::list_profiles()
-                        .map(|profiles| profiles.iter().any(|p| p.id == profile && p.connected))
+                    let result = platform::disconnect(&profile);
+                    let still_running = platform::list_profiles()
+                        .map(|profiles| {
+                            profiles
+                                .iter()
+                                .any(|p| p.id == profile && (p.connected || p.transitioning))
+                        })
                         .unwrap_or(true);
-                    match platform::disconnect(&profile) {
-                        Ok(()) if connected => continue,
+                    match result {
+                        Ok(()) if still_running => continue,
                         result => Command::Event(Event::Disconnected {
                             session: id,
                             result: result.map_err(|e| fault(&e)),
@@ -248,7 +282,11 @@ fn run(
                         if platform::helper_status() != 1 {
                             return Err(Error::Permission);
                         }
-                        let connection = platform::HelperClient::connect()?;
+                        let mut connection = platform::HelperClient::connect()?;
+                        let events = input.clone();
+                        connection.observe_loss(move || {
+                            let _ = events.send(Command::HelperLost(id));
+                        });
                         client = Some(connection);
                         let reply = client.as_mut().unwrap().request(Request::Status {
                             header: Header {
@@ -281,7 +319,13 @@ fn run(
                     let header = request.header();
                     let reply = (|| -> Result<Reply, Error> {
                         if client.is_none() {
-                            client = Some(platform::HelperClient::connect()?);
+                            let mut connection = platform::HelperClient::connect()?;
+                            let events = input.clone();
+                            let id = header.session;
+                            connection.observe_loss(move || {
+                                let _ = events.send(Command::HelperLost(id));
+                            });
+                            client = Some(connection);
                         }
                         client.as_mut().unwrap().request(request)
                     })();
@@ -305,10 +349,60 @@ fn run(
                 }
                 HelperJob::Install => {
                     let result = platform::register_helper();
+                    if let Err(error) = &result {
+                        let _ = input.send(Command::WorkerError(fault(error)));
+                    }
+                    if result.is_ok() && platform::helper_status() == -1 {
+                        Command::LocalInstalled
+                    } else {
+                        Command::HelperStatus(platform::helper_status())
+                    }
+                }
+                HelperJob::Remove => {
+                    client = None;
+                    let result = (|| -> Result<(), Error> {
+                        let mut connection = platform::HelperClient::connect()?;
+                        let reply = connection.request(Request::Status {
+                            header: Header {
+                                version: 1,
+                                session: SessionId::new(),
+                                sequence: 1,
+                            },
+                        })?;
+                        if !matches!(
+                            reply.result,
+                            ReplyResult::Status {
+                                active: false,
+                                cleanup_required: false
+                            }
+                        ) {
+                            return Err(Error::Cleanup);
+                        }
+                        drop(connection);
+                        platform::unregister_helper()
+                    })();
                     if let Err(error) = result {
                         let _ = input.send(Command::WorkerError(fault(&error)));
                     }
                     Command::HelperStatus(platform::helper_status())
+                }
+                HelperJob::Recover => {
+                    let result = (|| -> Result<(), Error> {
+                        let mut connection = platform::HelperClient::connect()?;
+                        let reply = connection.request(Request::Clear {
+                            header: Header {
+                                version: 1,
+                                session: SessionId::new(),
+                                sequence: 1,
+                            },
+                        })?;
+                        if matches!(reply.result, ReplyResult::Cleared) {
+                            Ok(())
+                        } else {
+                            Err(Error::Cleanup)
+                        }
+                    })();
+                    Command::Recovered(result.map_err(|e| fault(&e)))
                 }
                 HelperJob::Close => {
                     client = None;
@@ -407,7 +501,10 @@ fn run(
         let mut effects = vec![];
         match command {
             Command::Connect
-                if session.state() == SessionState::Disconnected && !view.preparing =>
+                if session.state() == SessionState::Disconnected
+                    && !view.preparing
+                    && !view.helper_busy
+                    && view.config_ready =>
             {
                 generation += 1;
                 view.preparing = true;
@@ -452,6 +549,9 @@ fn run(
                     Err(code) => view.error = Some(code),
                 }
             }
+            Command::Quit if view.helper_busy => {
+                view.error = Some(FaultCode::Conflict);
+            }
             Command::Disconnect | Command::Quit => {
                 if matches!(command, Command::Quit) {
                     quitting = true;
@@ -468,9 +568,33 @@ fn run(
             Command::Refresh => {
                 effects = session.handle(Event::Refresh { now_ms: now });
             }
+            Command::RetryCleanup
+                if session.state() == SessionState::Disconnected && !view.helper_busy =>
+            {
+                view.helper_busy = true;
+                let _ = helper_tx.send(HelperJob::Recover);
+            }
             Command::RetryCleanup => {
                 view.error = None;
                 effects = session.handle(Event::RetryCleanup { now_ms: now });
+            }
+            Command::Recovered(result) => {
+                view.helper_busy = false;
+                view.error = result.err();
+            }
+            Command::HelperLost(id)
+                if session.id() == Some(id)
+                    && matches!(
+                        session.state(),
+                        SessionState::Connecting | SessionState::Applying | SessionState::Active
+                    ) =>
+            {
+                eprintln!("helper_connection_lost state={:?}", session.state());
+                view.error = Some(FaultCode::Transport);
+                effects = session.handle(Event::Cancel {
+                    session: id,
+                    now_ms: now,
+                });
             }
             Command::ReloadProfiles => {
                 let _ = os_tx.send(OsJob::Profiles(None));
@@ -509,8 +633,10 @@ fn run(
                             view.error = Some(fault(&error));
                             continue;
                         }
-                        match save_config(&path, &config) {
-                            Ok(()) => {
+                        match persist_config(&path, &config) {
+                            Ok(warning) => {
+                                view.error = warning;
+                                view.config_ready = true;
                                 view.config = config;
                                 view.config_revision += 1;
                             }
@@ -518,6 +644,7 @@ fn run(
                                 if login_changed {
                                     let _ = platform::set_login(view.config.launch_at_login);
                                 }
+                                view.config_ready = false;
                                 view.error = Some(fault(&error));
                             }
                         }
@@ -526,12 +653,31 @@ fn run(
                 Ok(_) => view.error = Some(FaultCode::Conflict),
                 Err(error) => view.error = Some(fault(&error)),
             },
-            Command::InstallHelper if session.state() == SessionState::Disconnected => {
-                let _ = helper_tx.send(HelperJob::Install);
+            Command::InstallHelper | Command::RemoveHelper
+                if session.state() == SessionState::Disconnected
+                    && !view.preparing
+                    && !view.helper_busy =>
+            {
+                view.helper_busy = true;
+                view.error = None;
+                let _ = helper_tx.send(if matches!(command, Command::RemoveHelper) {
+                    HelperJob::Remove
+                } else {
+                    HelperJob::Install
+                });
             }
-            Command::HelperStatus(status) => view.helper_status = status,
+            Command::LocalInstalled => {
+                platform::request_local_relaunch();
+                view.helper_busy = false;
+                quitting = true;
+            }
+            Command::HelperStatus(status) => {
+                view.helper_busy = false;
+                view.helper_status = status;
+            }
             Command::WorkerError(code) => view.error = Some(code),
             Command::Native { session: id, kind } if Some(id) == session.id() => {
+                eprintln!("native_event kind={kind} state={:?}", session.state());
                 if kind == 1 {
                     view.vpn_connected = true;
                 }
@@ -575,8 +721,9 @@ fn run(
                 if matching && let Event::Planned { result, .. } = &mut event {
                     if result.is_ok() {
                         if let Some(candidate) = pending_config.take() {
-                            match save_config(&path, &candidate) {
-                                Ok(()) => {
+                            match persist_config(&path, &candidate) {
+                                Ok(warning) => {
+                                    view.error = warning;
                                     previous_config = Some(view.config.clone());
                                     view.config = candidate;
                                     view.config_revision += 1;
@@ -654,12 +801,17 @@ fn run(
         if session.state() != SessionState::Applying
             && let Some(previous) = previous_config.take()
         {
-            match save_config(&path, &previous) {
-                Ok(()) => {
+            match persist_config(&path, &previous) {
+                Ok(warning) => {
+                    view.error = warning.or(view.error);
                     view.config = previous;
                     view.config_revision += 1;
                 }
-                Err(error) => view.error = Some(fault(&error)),
+                Err(error) => {
+                    view.config_ready = false;
+                    view.error = Some(fault(&error));
+                    let _ = tx.send(Command::Disconnect);
+                }
             }
         }
         view.warnings = if session
@@ -685,6 +837,7 @@ mod tests {
             supported: true,
             split_enabled: true,
             connected: true,
+            transitioning: false,
         }
     }
     fn wait_for(rx: &async_channel::Receiver<View>, predicate: impl Fn(&View) -> bool) -> View {
@@ -701,6 +854,47 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    #[test]
+    fn post_replacement_failure_uses_visible_config_and_keeps_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let config = Config {
+            profile_id: Some("test-profile".into()),
+            ..Config::default()
+        };
+        save_config(&path, &config).unwrap();
+        let failure = || Err(Error::Io(std::io::Error::other("directory sync failed")));
+        assert_eq!(
+            visible_save_result(&path, &config, failure()).unwrap(),
+            Some(FaultCode::Io)
+        );
+        assert!(visible_save_result(&path, &Config::default(), failure()).is_err());
+        assert!(
+            visible_save_result(
+                &directory.path().join("missing.json"),
+                &Config::default(),
+                failure()
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn vpn_setup_network_notifications_do_not_cancel_pending_connect() {
+        for state in [
+            SessionState::Connecting,
+            SessionState::Applying,
+            SessionState::Disconnecting,
+        ] {
+            assert!(native_event(state, SessionId::new(), 3, 1).is_none());
+        }
+    }
+    #[test]
+    fn externally_transitioning_vpn_is_not_adopted_or_claimed() {
+        let mut p = profile();
+        p.connected = false;
+        p.transitioning = true;
+        assert!(selected_profile(&[p], Some("stable-test-id")).is_err());
     }
     #[test]
     fn controller_invalid_save_preserves_disk_and_quit_finishes_without_a_vpn() {
@@ -779,7 +973,7 @@ mod tests {
         ));
         assert!(matches!(
             native_event(SessionState::Active, id, 3, 4),
-            Some(Event::NetworkChanged { .. })
+            Some(Event::Refresh { .. })
         ));
         assert!(native_event(SessionState::Disconnected, id, 1, 5).is_none());
     }

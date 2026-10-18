@@ -15,6 +15,7 @@ actions!(
         Refresh,
         RetryCleanup,
         InstallHelper,
+        RemoveHelper,
         ReloadProfiles,
         Quit
     ]
@@ -65,6 +66,9 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
         .on_action(|_: &InstallHelper, cx| {
             cx.defer(|cx| send(cx, crate::controller::Command::InstallHelper))
         })
+        .on_action(|_: &RemoveHelper, cx| {
+            cx.defer(|cx| send(cx, crate::controller::Command::RemoveHelper))
+        })
         .on_action(|_: &ReloadProfiles, cx| {
             cx.defer(|cx| send(cx, crate::controller::Command::ReloadProfiles))
         })
@@ -90,7 +94,9 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
                 let quit_ready = view.quit_ready;
                 cx.global_mut::<Desktop>().view = view;
                 refresh_menu(cx);
-                cx.refresh_windows();
+                if let Some(handle) = cx.global::<Desktop>().settings {
+                    let _ = handle.update(cx, |_, _, cx| cx.notify());
+                }
                 if quit_ready {
                     finish_quit(cx);
                 }
@@ -125,6 +131,7 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
         return vec![MenuItem::action("Starting VPN Splitter…", NoAction).disabled(true)];
     }
     use vpn_splitter_core::session::SessionState;
+    let settings_open = settings_visible(cx);
     let view = view(cx);
     let disconnected = view.state == SessionState::Disconnected;
     let status = if view.preparing {
@@ -141,10 +148,12 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
     };
     let mut items = vec![MenuItem::action(status, NoAction).disabled(true)];
     if disconnected {
-        items.push(
-            MenuItem::action("Connect VPN", Connect)
-                .disabled(view.preparing || view.config.profile_id.is_none()),
-        );
+        items.push(MenuItem::action("Connect VPN", Connect).disabled(
+            view.preparing
+                || view.helper_busy
+                || !view.config_ready
+                || view.config.profile_id.is_none(),
+        ));
     } else {
         items.push(MenuItem::action(
             if view.adopted {
@@ -158,10 +167,11 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
     items.push(
         MenuItem::action("Refresh routes", Refresh).disabled(view.state != SessionState::Active),
     );
-    items.push(
-        MenuItem::action("Retry cleanup", RetryCleanup)
-            .disabled(view.state != SessionState::CleanupRequired),
-    );
+    items.push(MenuItem::action("Retry cleanup", RetryCleanup).disabled(
+        view.helper_busy
+            || (view.state != SessionState::CleanupRequired
+                && view.error != Some(vpn_splitter_core::protocol::FaultCode::Cleanup)),
+    ));
     items.push(MenuItem::submenu(gpui::Menu {
         name: "VPN profile".into(),
         disabled: false,
@@ -184,12 +194,18 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
     }));
     let adopted = view.adopted;
     items.push(MenuItem::separator());
-    items
-        .push(MenuItem::action("Profiles / Settings…", OpenSettings).checked(settings_visible(cx)));
+    items.push(MenuItem::action("Profiles / Settings…", OpenSettings).checked(settings_open));
     items.push(MenuItem::action("Diagnostics…", OpenDiagnostics));
     items.push(MenuItem::action("Reload VPN profiles", ReloadProfiles));
-    items
-        .push(MenuItem::action("Install / approve helper…", InstallHelper).disabled(!disconnected));
+    items.push(
+        MenuItem::action("Install / approve helper…", InstallHelper)
+            .disabled(!disconnected || view.preparing || view.helper_busy),
+    );
+    items.push(
+        MenuItem::action("Remove helper…", RemoveHelper).disabled(
+            !disconnected || view.preparing || view.helper_busy || view.helper_status != 1,
+        ),
+    );
     items.push(MenuItem::separator());
     items.push(MenuItem::action(
         if adopted && !disconnected {
@@ -304,6 +320,9 @@ fn quit(cx: &mut App) {
     send(cx, crate::controller::Command::Quit);
 }
 fn finish_quit(cx: &mut App) {
+    if let Err(error) = crate::platform::macos::relaunch_local_if_requested() {
+        eprintln!("Cannot reopen installed app: {error}");
+    }
     let tray = cx.global::<Desktop>().tray.clone();
     if let Err(error) = tray.close(cx) {
         eprintln!("Cannot close tray: {error}");

@@ -283,3 +283,45 @@ performance/polish work. This checkpoint is incomplete for VPN integration.
   service was installed and no VPN or routes were changed. Signed integration,
   admin approval, cleanup and uninstall qualification remain outstanding.
 - Full accessibility, resource matrix and Windows parity remain deferred.
+
+## Local macOS integration — 2026-10-18
+
+The user selected local use without an Apple developer identity, then explicitly
+approved privileged installation and a controlled saved-L2TP integration test.
+The package now supports an administrator-installed hardened ad-hoc pair, pinned
+by exact peer cdhash under a root-owned path. The existing Apple same-Team path
+remains for developer-signed distribution. This is not a notarized release.
+
+Verified on this Mac:
+
+- Native DNS snapshot serialization regression reproduced as Transport, then
+  fixed with an explicit JSON boolean. Connection-generated network notifications
+  no longer cancel Connecting, Applying or Disconnecting. Active notifications
+  request refresh; helper checks actual snapshot/route validity before invalidation.
+- Local install and update completed through macOS administrator approval. The
+  installed desktop/helper hashes matched the built pair. Preview quit and exact
+  installed executable relaunched using bounded singleton handover.
+- Saved L2TP connection reached Connected / routing Active. A documentation test
+  destination used the actual PPP interface. Physical default signature remained
+  unchanged and public GitHub HTTPS returned 200. The user independently confirmed
+  physical-ISP speedtest and successful access to an office server.
+- Refreshed 19 DBX connection endpoints over local MCP stdio; read only selected
+  enabled SSH endpoint metadata from the local DBX database. No credential fields
+  were selected or retained. Combined the private prior inventory, local CLI list and user edits.
+- Private configuration contains 100 rules, including 28 currently resolvable
+  hostnames. All current DBX/SSH IPv4 endpoints are covered. One broad subnet was
+  split around the VPN control endpoint, which must retain its physical path.
+  All 72 expected distinct VPN routes were present; none missing. Seven names
+  without native IPv4 answers remain in a private inventory, not active rules.
+  Complete wildcard discovery and IPv6 routing are not claimed.
+- Explicit Disconnect removed the test route and disconnected the app-owned VPN.
+  Quit with the full configuration exited, disconnected the VPN, left zero routes
+  on its PPP interface, and preserved the physical default. Configuration persisted.
+- Workspace tests: 70 passed, one ignored; formatting and Clippy passed. Packaging
+  checks verify hardened runtime and reject modified installer/helper snapshots.
+  CLI mock suite remains 12/12 passing. Real infrastructure strings were checked
+  against the tracked diff and were absent. Private data stays in Application Support.
+
+Still unqualified: full reboot/sleep/network-switch/crash matrix, VoiceOver manual
+review, login-at-startup behavior, developer-signed distribution and Windows.
+Earlier prototype memory numbers are not substituted for the real UI measurement.

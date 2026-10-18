@@ -1,7 +1,7 @@
 use vpn_splitter_core::{Error, config::Destination, routing::ResolvedHost, session::ProfileId};
 pub use vpn_splitter_helper::platform::macos::{
     HelperClient, Profile, Subscription, helper_status, list_profiles, register_helper, set_login,
-    snapshot,
+    snapshot, unregister_helper,
 };
 pub fn connect(profile: &ProfileId) -> Result<(), Error> {
     vpn_splitter_helper::platform::macos::control(profile, true)
@@ -9,7 +9,7 @@ pub fn connect(profile: &ProfileId) -> Result<(), Error> {
 pub fn disconnect(profile: &ProfileId) -> Result<(), Error> {
     if !list_profiles()?
         .iter()
-        .any(|p| &p.id == profile && p.connected)
+        .any(|p| &p.id == profile && (p.connected || p.transitioning))
     {
         return Ok(());
     }
@@ -48,6 +48,23 @@ pub fn resolve_hosts(destinations: &[Destination]) -> Result<Vec<ResolvedHost>, 
     }
     Ok(resolved)
 }
+static RELAUNCH_LOCAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn request_local_relaunch() {
+    RELAUNCH_LOCAL.store(true, std::sync::atomic::Ordering::Release);
+}
+pub fn relaunch_local_if_requested() -> std::io::Result<()> {
+    if RELAUNCH_LOCAL.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new(
+            "/Library/PrivilegedHelperTools/VPN Splitter.app/Contents/MacOS/vpn-splitter-desktop",
+        )
+        .arg("--relaunch")
+        .process_group(0)
+        .spawn()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
