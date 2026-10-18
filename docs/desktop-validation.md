@@ -311,8 +311,10 @@ Verified on this Mac:
 - Private configuration contains 100 rules, including 28 currently resolvable
   hostnames. All current DBX/SSH IPv4 endpoints are covered. One broad subnet was
   split around the VPN control endpoint, which must retain its physical path.
-  All 72 expected distinct VPN routes were present; none missing. Seven names
-  without native IPv4 answers remain in a private inventory, not active rules.
+  All 72 expected distinct VPN routes were present; none missing. One SSH alias
+  was expanded using local OpenSSH configuration and its IPv4 was covered. Six
+  domain names without native IPv4 answers remain in a private inventory, not
+  active rules.
   Complete wildcard discovery and IPv6 routing are not claimed.
 - Explicit Disconnect removed the test route and disconnected the app-owned VPN.
   Quit with the full configuration exited, disconnected the VPN, left zero routes
