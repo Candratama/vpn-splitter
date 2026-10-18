@@ -651,7 +651,7 @@ impl Element for TextElement {
                     };
                     window.paint_quad(fill(
                         Bounds::new(point(origin.x + x, origin.y), size(px(1.5), px(20.))),
-                        rgb(0x2d6a4f),
+                        rgb(0x0866d9),
                     ));
                 }
             }
@@ -694,8 +694,8 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .w_full().border_1().rounded_md().border_color(rgb(0xbac1be))
-            .focus_visible(|style|style.border_color(rgb(0x2d6a4f)))
+            .w_full().border_1().rounded_lg().border_color(rgba(0x88888833))
+            .focus_visible(|style|style.border_color(rgb(0x0866d9)))
             .line_height(px(20.)).text_size(px(14.))
             .child(div().h(px(252.)).w_full().p(px(6.)).child(TextElement{input:cx.entity()}))
     }

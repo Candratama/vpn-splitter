@@ -35,8 +35,25 @@ impl Page {
             Self::Diagnostics => "Diagnostics",
         }
     }
+
+    fn icon_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Vpn => include_bytes!("../assets/section-vpn.svg"),
+            Self::Routing => include_bytes!("../assets/section-routing.svg"),
+            Self::General => include_bytes!("../assets/section-general.svg"),
+            Self::Helper => include_bytes!("../assets/section-helper.svg"),
+            Self::Diagnostics => include_bytes!("../assets/section-diagnostics.svg"),
+        }
+    }
 }
 actions!(settings, [SaveSettings, NextField, PreviousField]);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonVariant {
+    Primary,
+    Secondary,
+    Destructive,
+}
 pub fn bind(cx: &mut App) {
     crate::text_input::bind(cx);
     cx.bind_keys([
@@ -267,6 +284,26 @@ pub fn button(
     disabled: bool,
     callback: impl Fn(&mut Window, &mut App) + Clone + 'static,
 ) -> Stateful<Div> {
+    styled_button(id, label, disabled, ButtonVariant::Secondary, callback)
+}
+
+#[allow(dead_code)]
+pub fn primary_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    disabled: bool,
+    callback: impl Fn(&mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    styled_button(id, label, disabled, ButtonVariant::Primary, callback)
+}
+
+pub fn styled_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    disabled: bool,
+    variant: ButtonVariant,
+    callback: impl Fn(&mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
     let label = label.into();
     let click = callback.clone();
     let key = callback.clone();
@@ -275,17 +312,40 @@ pub fn button(
         .role(accesskit::Role::Button)
         .aria_label(label.clone())
         .when(!disabled, |d| d.focusable())
-        .min_h(px(44.))
+        .h(px(32.))
         .flex_shrink_0()
         .px_3()
-        .py_2()
         .rounded_md()
         .border_1()
-        .border_color(rgb(0xb3bdb7))
         .cursor_pointer()
-        .focus_visible(|style| style.border_color(rgb(0x2d6a4f)).bg(rgba(0x2d6a4f18)))
+        .text_size(px(13.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(variant == ButtonVariant::Primary, |d| {
+            d.bg(rgb(0x0866d9))
+                .text_color(rgb(0xffffff))
+                .border_color(rgb(0x0866d9))
+                .font_weight(FontWeight::MEDIUM)
+                .hover(|s| s.bg(rgb(0x075bbe)))
+                .active(|s| s.bg(rgb(0x064e9e)))
+                .focus_visible(|s| s.border_color(rgb(0xffffff)))
+        })
+        .when(variant == ButtonVariant::Secondary, |d| {
+            d.border_color(rgba(0x88888833))
+                .hover(|s| s.bg(rgba(0x88888818)))
+                .active(|s| s.bg(rgba(0x88888828)))
+                .focus_visible(|s| s.border_color(rgb(0x0866d9)))
+        })
+        .when(variant == ButtonVariant::Destructive, |d| {
+            d.border_color(rgba(0xd32f2f40))
+                .text_color(rgb(0xd32f2f))
+                .hover(|s| s.bg(rgba(0xd32f2f12)))
+                .active(|s| s.bg(rgba(0xd32f2f24)))
+                .focus_visible(|s| s.border_color(rgb(0xd32f2f)))
+        })
         .when(disabled, |d| {
-            d.opacity(0.45)
+            d.opacity(0.4)
                 .aria_description("Unavailable in the current state")
         })
         .when(!disabled, |d| {
@@ -353,7 +413,7 @@ impl Render for Settings {
             .id("settings-navigation")
             .role(accesskit::Role::Navigation)
             .aria_label("Settings sections")
-            .w(px(190.))
+            .w(px(200.))
             .h_full()
             .flex_shrink_0()
             .overflow_y_scroll()
@@ -366,49 +426,121 @@ impl Render for Settings {
             .gap_1()
             .child(
                 div()
-                    .px_3()
-                    .py_3()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("VPN Splitter"),
+                    .px_2()
+                    .py_2p5()
+                    .mb_1()
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .child(
+                        svg()
+                            .data(include_bytes!("../assets/cloud-server.svg"))
+                            .size(px(20.))
+                            .text_color(if dark { rgb(0x64b5f6) } else { rgb(0x0866d9) }),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(14.))
+                            .child("VPN Splitter"),
+                    ),
             );
         for (index, page) in Page::ALL.into_iter().enumerate() {
             let this = entity.clone();
             let selected = self.page == page;
-            sidebar = sidebar.child(
-                button(("section", index), page.title(), false, move |_, cx| {
-                    this.update(cx, |this, cx| {
-                        this.page = page;
-                        cx.notify();
-                    });
-                })
-                .border_color(transparent_black())
-                .aria_selected(selected)
-                .bg(if selected { rgb(0x0866d9) } else { sidebar_bg })
-                .text_color(if selected { rgb(0xffffff) } else { fg })
-                .hover(move |style| {
-                    style.bg(if selected {
-                        rgb(0x075bbe)
-                    } else if dark {
-                        rgb(0x383838)
-                    } else {
-                        rgb(0xdedede)
-                    })
-                })
-                .focus_visible(move |style| {
-                    style
-                        .border_color(if selected {
-                            rgb(0xffffff)
+            sidebar =
+                sidebar.child(
+                    div()
+                        .id(("section", index))
+                        .role(accesskit::Role::Button)
+                        .aria_label(page.title())
+                        .aria_selected(selected)
+                        .aria_description(if selected {
+                            "Current section"
                         } else {
-                            rgb(0x0866d9)
+                            "Open section"
                         })
+                        .focusable()
+                        .h(px(32.))
+                        .w_full()
+                        .px_2p5()
+                        .rounded_lg()
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2p5()
                         .bg(if selected { rgb(0x0866d9) } else { sidebar_bg })
-                })
-                .aria_description(if selected {
-                    "Current section"
-                } else {
-                    "Open section"
-                }),
-            );
+                        .text_color(if selected { rgb(0xffffff) } else { fg })
+                        .text_size(px(13.))
+                        .font_weight(if selected {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .hover(move |style| {
+                            style.bg(if selected {
+                                rgb(0x075bbe)
+                            } else if dark {
+                                rgb(0x363636)
+                            } else {
+                                rgb(0xdedede)
+                            })
+                        })
+                        .active(move |style| {
+                            style.bg(if selected {
+                                rgb(0x064e9e)
+                            } else if dark {
+                                rgb(0x303030)
+                            } else {
+                                rgb(0xd4d4d4)
+                            })
+                        })
+                        .focus_visible(move |style| {
+                            style.border_1().border_color(if selected {
+                                rgb(0xffffff)
+                            } else {
+                                rgb(0x0866d9)
+                            })
+                        })
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |this, cx| {
+                                this.page = page;
+                                cx.notify();
+                            });
+                        })
+                        .on_key_down({
+                            let this = entity.clone();
+                            move |event, _, cx| {
+                                if event.keystroke.key == "enter" || event.keystroke.key == "space"
+                                {
+                                    this.update(cx, |this, cx| {
+                                        this.page = page;
+                                        cx.notify();
+                                    });
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .on_a11y_action(accesskit::Action::Click, {
+                            let this = entity.clone();
+                            move |_, _, cx| {
+                                this.update(cx, |this, cx| {
+                                    this.page = page;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(svg().data(page.icon_bytes()).size(px(16.)).text_color(
+                            if selected {
+                                rgb(0xffffff)
+                            } else if dark {
+                                rgb(0xaaaaaa)
+                            } else {
+                                rgb(0x555555)
+                            },
+                        ))
+                        .child(page.title()),
+                );
         }
 
         let mut content = div()
@@ -451,45 +583,130 @@ impl Render for Settings {
                     .flex_col()
                     .gap_2();
                 if live.profiles.is_empty() {
-                    profiles = profiles
-                        .child("No saved profiles. Add one in macOS VPN settings, then reload.");
+                    profiles = profiles.child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(separator)
+                            .bg(if dark { rgb(0x242424) } else { rgb(0xffffff) })
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("No saved profiles found"),
+                            )
+                            .child(div().text_sm().text_color(muted).child(
+                                "Add an L2TP profile in macOS System Settings > VPN, then reload.",
+                            )),
+                    );
                 }
                 for (index, profile) in live.profiles.iter().enumerate() {
                     let id = profile.id.as_str().to_owned();
                     let selected = self.draft.profile_id.as_deref() == Some(id.as_str());
                     let this = entity.clone();
-                    let label = format!(
-                        "{}{}{}",
-                        if selected { "● " } else { "○ " },
-                        profile.name,
-                        if !profile.supported {
-                            " — unsupported"
-                        } else if !profile.split_enabled {
-                            " — disable Send all traffic"
-                        } else {
-                            ""
-                        }
-                    );
+                    let is_disabled = busy || live.state != SessionState::Disconnected;
                     profiles = profiles.child(
-                        button(
-                            ("profile", index),
-                            label,
-                            busy || live.state != SessionState::Disconnected,
-                            move |_, cx| {
-                                this.update(cx, |this, cx| {
-                                    this.draft.profile_id = Some(id.clone());
-                                    this.dirty = true;
-                                    this.error = None;
-                                    this.notice = None;
-                                    cx.notify();
-                                });
-                            },
-                        )
-                        .border_color(if selected {
-                            rgb(0x0866d9)
-                        } else {
-                            separator
-                        }),
+                        div()
+                            .id(("profile", index))
+                            .role(accesskit::Role::RadioButton)
+                            .aria_label(profile.name.clone())
+                            .aria_selected(selected)
+                            .when(!is_disabled, |d| d.focusable())
+                            .px_3p5()
+                            .py_2p5()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(if selected { rgb(0x0866d9) } else { separator })
+                            .bg(if selected {
+                                if dark {
+                                    rgba(0x0866d920)
+                                } else {
+                                    rgba(0x0866d90c)
+                                }
+                            } else {
+                                if dark { rgb(0x242424) } else { rgb(0xffffff) }
+                            })
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .hover(move |style| {
+                                if !selected {
+                                    style.bg(if dark { rgb(0x2a2a2a) } else { rgb(0xf8f8f8) })
+                                } else {
+                                    style
+                                }
+                            })
+                            .focus_visible(|style| style.border_color(rgb(0x0866d9)))
+                            .on_click(move |_, _, cx| {
+                                if !is_disabled {
+                                    this.update(cx, |this, cx| {
+                                        this.draft.profile_id = Some(id.clone());
+                                        this.dirty = true;
+                                        this.error = None;
+                                        this.notice = None;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .size(px(16.))
+                                            .rounded_full()
+                                            .border_1()
+                                            .border_color(if selected {
+                                                rgb(0x0866d9)
+                                            } else {
+                                                muted
+                                            })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(selected, |c| {
+                                                c.child(
+                                                    div()
+                                                        .size(px(8.))
+                                                        .rounded_full()
+                                                        .bg(rgb(0x0866d9)),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_size(px(14.))
+                                            .child(profile.name.clone()),
+                                    ),
+                            )
+                            .child(if !profile.supported {
+                                div().text_xs().text_color(muted).child("Unsupported")
+                            } else if !profile.split_enabled {
+                                div()
+                                    .text_xs()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(if dark {
+                                        rgba(0xff950020)
+                                    } else {
+                                        rgba(0xff950015)
+                                    })
+                                    .text_color(if dark { rgb(0xffb340) } else { rgb(0xb36200) })
+                                    .child("Send all traffic must be off")
+                            } else {
+                                div()
+                                    .text_xs()
+                                    .text_color(if selected { rgb(0x0866d9) } else { muted })
+                                    .child("Ready")
+                            }),
                     );
                 }
                 content = content.child(profiles).child(button(
@@ -503,12 +720,37 @@ impl Render for Settings {
                 let focus_editor = self.editor.clone();
                 let import = entity.clone();
                 let export = entity.clone();
+                let rule_count = self.draft.destinations.len();
                 content = content
-                    .child(div().text_color(muted).child("Only these destinations use the VPN. Other traffic keeps its normal route."))
-                    .child(div().id("destinations-label").role(accesskit::Role::Label)
-                        .aria_label("VPN destinations").font_weight(FontWeight::SEMIBOLD).cursor_pointer()
-                        .on_click(move |_, window, cx| window.focus(&focus_editor.focus_handle(cx), cx))
-                        .child("VPN destinations"))
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child("Only these destinations use the VPN. Other traffic keeps its normal route."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .id("destinations-label")
+                                    .role(accesskit::Role::Label)
+                                    .aria_label("VPN destinations")
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| {
+                                        window.focus(&focus_editor.focus_handle(cx), cx)
+                                    })
+                                    .child("VPN destinations"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format!("{rule_count} configured")),
+                            ),
+                    )
                     .child(self.editor.clone())
                     .child(div().text_sm().text_color(muted).child("One IPv4, CIDR, or hostname per line. No URLs, wildcards, or IPv6. Hostname routes refresh every 5 minutes while active."))
                     .child(div().flex().flex_wrap().gap_2()
@@ -517,6 +759,7 @@ impl Render for Settings {
             }
             Page::General => {
                 let login = entity.clone();
+                let is_login = self.draft.launch_at_login;
                 content =
                     content
                         .child(
@@ -524,46 +767,142 @@ impl Render for Settings {
                                 .text_color(muted)
                                 .child("Choose how VPN Splitter starts on this Mac."),
                         )
-                        .child(button(
-                            "launch-at-login",
-                            if self.draft.launch_at_login {
-                                "☑ Launch at login"
-                            } else {
-                                "☐ Launch at login"
-                            },
-                            busy || live.state != SessionState::Disconnected,
-                            move |_, cx| {
-                                login.update(cx, |this, cx| {
-                                    this.draft.launch_at_login = !this.draft.launch_at_login;
-                                    this.dirty = true;
-                                    this.notice = None;
-                                    cx.notify();
-                                });
-                            },
-                        ))
+                        .child(
+                            div()
+                                .p_3p5()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(separator)
+                                .bg(if dark { rgb(0x242424) } else { rgb(0xffffff) })
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_4()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_size(px(14.))
+                                                .child("Launch at login"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child("Start VPN Splitter in the menu bar when you log in to macOS."),
+                                        ),
+                                )
+                                .child(styled_button(
+                                    "launch-at-login",
+                                    if is_login { "Enabled" } else { "Disabled" },
+                                    busy || live.state != SessionState::Disconnected,
+                                    if is_login {
+                                        ButtonVariant::Primary
+                                    } else {
+                                        ButtonVariant::Secondary
+                                    },
+                                    move |_, cx| {
+                                        login.update(cx, |this, cx| {
+                                            this.draft.launch_at_login = !this.draft.launch_at_login;
+                                            this.dirty = true;
+                                            this.notice = None;
+                                            cx.notify();
+                                        });
+                                    },
+                                )),
+                        )
                         .child(div().text_sm().text_color(muted).child(
-                            "Starts in the menu bar. VPN connections are started manually.",
+                            "Starts in the menu bar without showing the main window. VPN connections are initiated manually.",
                         ));
             }
             Page::Helper => {
-                let helper = match live.helper_status {
-                    -1 => {
-                        "Local setup required. Installation requests administrator approval and reopens the installed app."
-                    }
-                    0 => "Helper is not registered.",
-                    1 => "Helper is installed.",
-                    2 => "Approve the helper in macOS System Settings.",
-                    _ => "Install the app bundle to set up the helper.",
+                let (badge_bg, badge_fg, status_title, helper_desc) = match live.helper_status {
+                    1 => (
+                        if dark {
+                            rgba(0x34c75925)
+                        } else {
+                            rgba(0x34c75918)
+                        },
+                        if dark { rgb(0x4cd964) } else { rgb(0x28a745) },
+                        "Installed & Active",
+                        "The privileged helper is running and authorized to manage routing tables.",
+                    ),
+                    2 => (
+                        if dark {
+                            rgba(0xff950025)
+                        } else {
+                            rgba(0xff950018)
+                        },
+                        if dark { rgb(0xffb340) } else { rgb(0xc67100) },
+                        "Approval Required",
+                        "Approve the helper in macOS System Settings > General > Login Items & Extensions.",
+                    ),
+                    _ => (
+                        if dark {
+                            rgba(0x8e8e9325)
+                        } else {
+                            rgba(0x8e8e9318)
+                        },
+                        muted,
+                        "Local Setup Required",
+                        "Installation requests administrator approval and registers the root helper tool.",
+                    ),
                 };
                 content = content
-                    .child(div().text_color(muted).child("The helper manages VPN routes with administrator permission."))
-                    .child(div().child(helper))
-                    .child(button("install-helper", "Install / approve helper…",
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child("The helper manages VPN routes with administrator permission."),
+                    )
+                    .child(
+                        div()
+                            .p_3p5()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(separator)
+                            .bg(if dark { rgb(0x242424) } else { rgb(0xffffff) })
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_size(px(14.))
+                                            .child("System Route Helper"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_md()
+                                            .bg(badge_bg)
+                                            .text_color(badge_fg)
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(status_title),
+                                    ),
+                            )
+                            .child(div().text_xs().text_color(muted).child(helper_desc)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(button("install-helper", "Install / approve helper…",
                         live.state != SessionState::Disconnected || live.preparing || live.helper_busy,
                         |_, cx| tray::send(cx, Command::InstallHelper)))
                     .child(button("remove-helper", "Remove helper…",
                         live.state != SessionState::Disconnected || live.preparing || live.helper_busy || live.helper_status != 1,
-                        |_, cx| tray::send(cx, Command::RemoveHelper)))
+                        |_, cx| tray::send(cx, Command::RemoveHelper))))
                     .child(div().text_sm().text_color(muted).child("Disconnect before changing the helper. Removal checks route cleanup first."));
             }
             Page::Diagnostics => {
@@ -573,11 +912,27 @@ impl Render for Settings {
                 let copy = redacted.clone();
                 content = content
                     .child(div().text_color(muted).child("Reports hide private infrastructure details by default."))
-                    .child(div().text_sm().child(redacted))
-                    .child(button("copy-redacted", "Copy redacted report", false, move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
+                    .child(
+                        div()
+                            .p_3()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(separator)
+                            .bg(if dark { rgb(0x181818) } else { rgb(0xffffff) })
+                            .font_family("Menlo")
+                            .text_xs()
+                            .line_height(px(18.))
+                            .child(redacted),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(button("copy-redacted", "Copy redacted report", false, move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
                     .child(button("copy-private", "Copy private report…", private.is_none(), move |_, cx| {
                         if let Some(text) = &private { cx.write_to_clipboard(ClipboardItem::new_string(text.clone())); }
-                    }))
+                            })),
+                    )
                     .child(div().text_sm().text_color(muted).child("Private reports include profile names and destinations. Share only with people you trust."));
             }
         }
@@ -604,52 +959,87 @@ impl Render for Settings {
         }
 
         let save = entity;
-        let mut footer = div()
+        let (status_dot, status_text) = match live.state {
+            SessionState::Active => (rgb(0x34c759), "VPN connected · Routing active"),
+            SessionState::Connecting => (rgb(0xff9500), "Connecting VPN…"),
+            SessionState::Applying => (rgb(0xff9500), "Applying routes…"),
+            SessionState::Disconnecting => (rgb(0xff9500), "Disconnecting VPN…"),
+            SessionState::CleanupRequired => (rgb(0xff3b30), "Route cleanup required"),
+            SessionState::Disconnected => (
+                if live.vpn_connected {
+                    rgb(0x34c759)
+                } else {
+                    rgb(0x8e8e93)
+                },
+                if live.vpn_connected {
+                    "VPN connected · Routing idle"
+                } else {
+                    "VPN disconnected · Routing idle"
+                },
+            ),
+        };
+
+        let footer = div()
             .flex_shrink_0()
             .border_t_1()
             .border_color(separator)
-            .p_4()
+            .px_6()
+            .py_3p5()
             .flex()
-            .flex_col()
-            .gap_2()
+            .items_center()
+            .justify_between()
+            .gap_4()
             .child(
                 div()
-                    .id("connection-status")
-                    .role(accesskit::Role::Label)
-                    .aria_label(format!(
-                        "VPN {}. Routing {:?}",
-                        if live.vpn_connected {
-                            "connected"
-                        } else {
-                            "disconnected"
-                        },
-                        live.state
-                    ))
-                    .text_sm()
-                    .child(format!(
-                        "VPN {} · Routing {:?}",
-                        if live.vpn_connected {
-                            "connected"
-                        } else {
-                            "disconnected"
-                        },
-                        live.state
-                    )),
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .child(
+                        div()
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(status_dot)
+                            .flex_shrink_0(),
+                    )
+                    .child(
+                        div()
+                            .id("connection-status")
+                            .role(accesskit::Role::Label)
+                            .aria_label(format!(
+                                "VPN {}. Routing {:?}",
+                                if live.vpn_connected {
+                                    "connected"
+                                } else {
+                                    "disconnected"
+                                },
+                                live.state
+                            ))
+                            .text_sm()
+                            .child(status_text),
+                    )
+                    .when(self.dirty, |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_md()
+                                .bg(if dark {
+                                    rgba(0xff950025)
+                                } else {
+                                    rgba(0xff950018)
+                                })
+                                .text_color(if dark { rgb(0xffb340) } else { rgb(0xc67100) })
+                                .child("Unsaved changes"),
+                        )
+                    }),
             );
-        if self.dirty {
-            footer = footer.child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("Unsaved changes. Save before connecting."),
-            );
-        }
-        footer = footer.child(
+        let footer = footer.child(
             div()
                 .flex()
-                .flex_wrap()
+                .items_center()
                 .gap_2()
-                .child(button(
+                .child(styled_button(
                     "save-rules",
                     if live.state == SessionState::Active {
                         "Save / Apply"
@@ -657,11 +1047,12 @@ impl Render for Settings {
                         "Save changes"
                     },
                     busy || self.awaiting_save || !self.dirty,
+                    ButtonVariant::Secondary,
                     move |window, cx| {
                         save.update(cx, |this, cx| this.save(&SaveSettings, window, cx))
                     },
                 ))
-                .child(button(
+                .child(styled_button(
                     "connect-vpn",
                     if live.state == SessionState::Disconnected {
                         "Connect VPN"
@@ -671,6 +1062,11 @@ impl Render for Settings {
                         "Disconnect VPN"
                     },
                     connection_action_disabled(&live, self.dirty, self.awaiting_save),
+                    if live.state == SessionState::Disconnected {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Destructive
+                    },
                     move |_, cx| {
                         tray::send(
                             cx,
@@ -686,10 +1082,11 @@ impl Render for Settings {
                     live.state == SessionState::CleanupRequired
                         || live.error == Some(vpn_splitter_core::protocol::FaultCode::Cleanup),
                     |row| {
-                        row.child(button(
+                        row.child(styled_button(
                             "retry-cleanup",
                             "Retry cleanup",
                             live.helper_busy,
+                            ButtonVariant::Secondary,
                             |_, cx| tray::send(cx, Command::RetryCleanup),
                         ))
                     },

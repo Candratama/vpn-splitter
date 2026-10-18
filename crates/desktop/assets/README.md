@@ -15,5 +15,14 @@ and straight-alpha RGBA are 18 by 18 pixels. The menu bar shows only the icon,
 without a text title. The tray embeds the RGBA directly, with no runtime SVG
 renderer. This is a fixed image, not an AppKit template image.
 
+## Section icons
+
+Settings sections use Stroke Rounded icons from Hugeicons (MIT license):
+- VPN: Globe02Icon (section-vpn.svg)
+- Routing rules: Route01Icon (section-routing.svg)
+- General: Settings01Icon (section-general.svg)
+- Helper: Shield01Icon (section-helper.svg)
+- Diagnostics: Activity01Icon (section-diagnostics.svg)
+
 Raster assets were rendered with resvg 0.46.0; the macOS iconset was assembled
 with `iconutil -c icns`. Regenerate the raster assets when changing the SVGs.
