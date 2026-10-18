@@ -11,8 +11,30 @@ use vpn_splitter_core::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Settings,
+    Vpn,
+    Routing,
+    General,
+    Helper,
     Diagnostics,
+}
+impl Page {
+    const ALL: [Self; 5] = [
+        Self::Vpn,
+        Self::Routing,
+        Self::General,
+        Self::Helper,
+        Self::Diagnostics,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Vpn => "VPN",
+            Self::Routing => "Routing rules",
+            Self::General => "General",
+            Self::Helper => "Helper",
+            Self::Diagnostics => "Diagnostics",
+        }
+    }
 }
 actions!(settings, [SaveSettings, NextField, PreviousField]);
 pub fn bind(cx: &mut App) {
@@ -33,6 +55,7 @@ fn connection_action_disabled(live: &controller::View, dirty: bool, awaiting_sav
 }
 pub struct Settings {
     pub page: Page,
+    focus_handle: FocusHandle,
     editor: Entity<TextInput>,
     draft: Config,
     revision: u64,
@@ -62,7 +85,8 @@ impl Settings {
         })
         .detach();
         Self {
-            page: Page::Settings,
+            page: Page::Vpn,
+            focus_handle: cx.focus_handle(),
             editor,
             draft,
             revision,
@@ -231,6 +255,12 @@ impl Settings {
     }
 }
 
+impl Focusable for Settings {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 pub fn button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -245,6 +275,8 @@ pub fn button(
         .role(accesskit::Role::Button)
         .aria_label(label.clone())
         .when(!disabled, |d| d.focusable())
+        .min_h(px(44.))
+        .flex_shrink_0()
         .px_3()
         .py_2()
         .rounded_md()
@@ -272,6 +304,9 @@ pub fn button(
 }
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
         let live = tray::view(cx).clone();
         if self.revision != live.config_revision && (!self.dirty || self.awaiting_save) {
             self.revision = live.config_revision;
@@ -296,25 +331,94 @@ impl Render for Settings {
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
-        let bg = if dark { rgb(0x202522) } else { rgb(0xf5f5f3) };
-        let fg = if dark { rgb(0xe7ece8) } else { rgb(0x202421) };
+        let bg = if dark { rgb(0x202020) } else { rgb(0xf5f5f5) };
+        let fg = if dark { rgb(0xf0f0f0) } else { rgb(0x242424) };
+        let muted = if dark { rgb(0xb7b7b7) } else { rgb(0x606060) };
+        let sidebar_bg = if dark { rgb(0x292929) } else { rgb(0xececec) };
+        let separator = if dark {
+            rgba(0xffffff20)
+        } else {
+            rgba(0x00000018)
+        };
         let entity = cx.entity();
-        let settings = entity.clone();
-        let diagnostics = entity.clone();
-        let mut root = div()
-            .id("vpn-settings")
-            .role(accesskit::Role::Group)
-            .aria_label("VPN Splitter settings")
-            .key_context("Settings")
-            .on_action(cx.listener(Self::save))
-            .on_action(cx.listener(Self::next))
-            .on_action(cx.listener(Self::previous))
-            .size_full()
+        let busy = live.helper_busy
+            || live.preparing
+            || !matches!(
+                live.state,
+                SessionState::Disconnected | SessionState::Active
+            )
+            || self.file_busy;
+
+        let mut sidebar = div()
+            .id("settings-navigation")
+            .role(accesskit::Role::Navigation)
+            .aria_label("Settings sections")
+            .w(px(190.))
+            .h_full()
+            .flex_shrink_0()
             .overflow_y_scroll()
-            .bg(bg)
-            .text_color(fg)
-            .text_size(px(14.))
-            .p_5()
+            .bg(sidebar_bg)
+            .border_r_1()
+            .border_color(separator)
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .px_3()
+                    .py_3()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("VPN Splitter"),
+            );
+        for (index, page) in Page::ALL.into_iter().enumerate() {
+            let this = entity.clone();
+            let selected = self.page == page;
+            sidebar = sidebar.child(
+                button(("section", index), page.title(), false, move |_, cx| {
+                    this.update(cx, |this, cx| {
+                        this.page = page;
+                        cx.notify();
+                    });
+                })
+                .border_color(transparent_black())
+                .aria_selected(selected)
+                .bg(if selected { rgb(0x0866d9) } else { sidebar_bg })
+                .text_color(if selected { rgb(0xffffff) } else { fg })
+                .hover(move |style| {
+                    style.bg(if selected {
+                        rgb(0x075bbe)
+                    } else if dark {
+                        rgb(0x383838)
+                    } else {
+                        rgb(0xdedede)
+                    })
+                })
+                .focus_visible(move |style| {
+                    style
+                        .border_color(if selected {
+                            rgb(0xffffff)
+                        } else {
+                            rgb(0x0866d9)
+                        })
+                        .bg(if selected { rgb(0x0866d9) } else { sidebar_bg })
+                })
+                .aria_description(if selected {
+                    "Current section"
+                } else {
+                    "Open section"
+                }),
+            );
+        }
+
+        let mut content = div()
+            .id(("section-content", self.page as usize))
+            .role(accesskit::Role::Group)
+            .aria_label(self.page.title())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_6()
             .flex()
             .flex_col()
             .gap_3()
@@ -322,30 +426,192 @@ impl Render for Settings {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("VPN Splitter"),
-            )
-            .child(
-                div()
+                    .child(self.page.title()),
+            );
+
+        match self.page {
+            Page::Vpn => {
+                content = content
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child("Choose a saved macOS L2TP profile for split routing."),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Saved profiles"),
+                    );
+                let mut profiles = div()
+                    .id("profiles")
+                    .role(accesskit::Role::Group)
+                    .aria_label("Saved VPN profiles")
+                    .flex_shrink_0()
                     .flex()
-                    .gap_2()
-                    .child(button("settings-tab", "Settings", false, move |_, cx| {
-                        settings.update(cx, |this, cx| {
-                            this.page = Page::Settings;
-                            cx.notify();
-                        })
+                    .flex_col()
+                    .gap_2();
+                if live.profiles.is_empty() {
+                    profiles = profiles
+                        .child("No saved profiles. Add one in macOS VPN settings, then reload.");
+                }
+                for (index, profile) in live.profiles.iter().enumerate() {
+                    let id = profile.id.as_str().to_owned();
+                    let selected = self.draft.profile_id.as_deref() == Some(id.as_str());
+                    let this = entity.clone();
+                    let label = format!(
+                        "{}{}{}",
+                        if selected { "● " } else { "○ " },
+                        profile.name,
+                        if !profile.supported {
+                            " — unsupported"
+                        } else if !profile.split_enabled {
+                            " — disable Send all traffic"
+                        } else {
+                            ""
+                        }
+                    );
+                    profiles = profiles.child(
+                        button(
+                            ("profile", index),
+                            label,
+                            busy || live.state != SessionState::Disconnected,
+                            move |_, cx| {
+                                this.update(cx, |this, cx| {
+                                    this.draft.profile_id = Some(id.clone());
+                                    this.dirty = true;
+                                    this.error = None;
+                                    this.notice = None;
+                                    cx.notify();
+                                });
+                            },
+                        )
+                        .border_color(if selected {
+                            rgb(0x0866d9)
+                        } else {
+                            separator
+                        }),
+                    );
+                }
+                content = content.child(profiles).child(button(
+                    "reload-profiles",
+                    "Reload profiles",
+                    busy,
+                    |_, cx| tray::send(cx, Command::ReloadProfiles),
+                ));
+            }
+            Page::Routing => {
+                let focus_editor = self.editor.clone();
+                let import = entity.clone();
+                let export = entity.clone();
+                content = content
+                    .child(div().text_color(muted).child("Only these destinations use the VPN. Other traffic keeps its normal route."))
+                    .child(div().id("destinations-label").role(accesskit::Role::Label)
+                        .aria_label("VPN destinations").font_weight(FontWeight::SEMIBOLD).cursor_pointer()
+                        .on_click(move |_, window, cx| window.focus(&focus_editor.focus_handle(cx), cx))
+                        .child("VPN destinations"))
+                    .child(self.editor.clone())
+                    .child(div().text_sm().text_color(muted).child("One IPv4, CIDR, or hostname per line. No URLs, wildcards, or IPv6. Hostname routes refresh every 5 minutes while active."))
+                    .child(div().flex().flex_wrap().gap_2()
+                        .child(button("import-rules", "Import…", busy, move |_, cx| import.update(cx, |this, cx| this.import(cx))))
+                        .child(button("export-rules", "Export…", busy, move |_, cx| export.update(cx, |this, cx| this.export(cx)))));
+            }
+            Page::General => {
+                let login = entity.clone();
+                content =
+                    content
+                        .child(
+                            div()
+                                .text_color(muted)
+                                .child("Choose how VPN Splitter starts on this Mac."),
+                        )
+                        .child(button(
+                            "launch-at-login",
+                            if self.draft.launch_at_login {
+                                "☑ Launch at login"
+                            } else {
+                                "☐ Launch at login"
+                            },
+                            busy || live.state != SessionState::Disconnected,
+                            move |_, cx| {
+                                login.update(cx, |this, cx| {
+                                    this.draft.launch_at_login = !this.draft.launch_at_login;
+                                    this.dirty = true;
+                                    this.notice = None;
+                                    cx.notify();
+                                });
+                            },
+                        ))
+                        .child(div().text_sm().text_color(muted).child(
+                            "Starts in the menu bar. VPN connections are started manually.",
+                        ));
+            }
+            Page::Helper => {
+                let helper = match live.helper_status {
+                    -1 => {
+                        "Local setup required. Installation requests administrator approval and reopens the installed app."
+                    }
+                    0 => "Helper is not registered.",
+                    1 => "Helper is installed.",
+                    2 => "Approve the helper in macOS System Settings.",
+                    _ => "Install the app bundle to set up the helper.",
+                };
+                content = content
+                    .child(div().text_color(muted).child("The helper manages VPN routes with administrator permission."))
+                    .child(div().child(helper))
+                    .child(button("install-helper", "Install / approve helper…",
+                        live.state != SessionState::Disconnected || live.preparing || live.helper_busy,
+                        |_, cx| tray::send(cx, Command::InstallHelper)))
+                    .child(button("remove-helper", "Remove helper…",
+                        live.state != SessionState::Disconnected || live.preparing || live.helper_busy || live.helper_status != 1,
+                        |_, cx| tray::send(cx, Command::RemoveHelper)))
+                    .child(div().text_sm().text_color(muted).child("Disconnect before changing the helper. Removal checks route cleanup first."));
+            }
+            Page::Diagnostics => {
+                let redacted = crate::diagnostics::export(&live, false)
+                    .unwrap_or_else(|_| "Diagnostics unavailable".into());
+                let private = crate::diagnostics::export(&live, true).ok();
+                let copy = redacted.clone();
+                content = content
+                    .child(div().text_color(muted).child("Reports hide private infrastructure details by default."))
+                    .child(div().text_sm().child(redacted))
+                    .child(button("copy-redacted", "Copy redacted report", false, move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
+                    .child(button("copy-private", "Copy private report…", private.is_none(), move |_, cx| {
+                        if let Some(text) = &private { cx.write_to_clipboard(ClipboardItem::new_string(text.clone())); }
                     }))
-                    .child(button(
-                        "diagnostics-tab",
-                        "Diagnostics",
-                        false,
-                        move |_, cx| {
-                            diagnostics.update(cx, |this, cx| {
-                                this.page = Page::Diagnostics;
-                                cx.notify();
-                            })
-                        },
-                    )),
-            )
+                    .child(div().text_sm().text_color(muted).child("Private reports include profile names and destinations. Share only with people you trust."));
+            }
+        }
+
+        if let Some(error) = self
+            .error
+            .as_deref()
+            .or_else(|| live.error.map(controller::message))
+        {
+            content = content.child(
+                div()
+                    .id("settings-error")
+                    .role(accesskit::Role::Alert)
+                    .aria_label(error.to_owned())
+                    .text_color(if dark { rgb(0xffada3) } else { rgb(0xa52b20) })
+                    .child(format!("Error: {error}")),
+            );
+        }
+        if let Some(notice) = &self.notice {
+            content = content.child(div().text_sm().child(notice.clone()));
+        }
+        for warning in &live.warnings {
+            content = content.child(div().text_sm().text_color(muted).child(warning.clone()));
+        }
+
+        let save = entity;
+        let mut footer = div()
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(separator)
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_2()
             .child(
                 div()
                     .id("connection-status")
@@ -359,8 +625,9 @@ impl Render for Settings {
                         },
                         live.state
                     ))
+                    .text_sm()
                     .child(format!(
-                        "VPN: {}   ·   Routes: {:?}",
+                        "VPN {} · Routing {:?}",
                         if live.vpn_connected {
                             "connected"
                         } else {
@@ -369,146 +636,91 @@ impl Render for Settings {
                         live.state
                     )),
             );
-        if self.page == Page::Diagnostics {
-            let redacted = crate::diagnostics::export(&live, false)
-                .unwrap_or_else(|_| "Diagnostics unavailable".into());
-            let private = crate::diagnostics::export(&live, true).ok();
-            let copy = redacted.clone();
-            return root.child(div().text_sm().child(redacted)).child(div().flex().gap_2()
-                .child(button("copy-redacted","Copy redacted report",false,move|_,cx|cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
-                .child(button("copy-private","Copy with infrastructure (private)",private.is_none(),move|_,cx|{if let Some(text)=&private{cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));}})))
-                .child("Reports exclude infrastructure by default. An explicit private report includes profile names and destinations.");
-        }
-        let busy = live.helper_busy
-            || live.preparing
-            || !matches!(
-                live.state,
-                SessionState::Disconnected | SessionState::Active
-            )
-            || self.file_busy;
-        root = root.child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Saved L2TP profile"),
-        );
-        let mut profiles = div()
-            .id("profiles")
-            .role(accesskit::Role::Group)
-            .aria_label("Saved VPN profiles")
-            .max_h(px(180.))
-            .flex_shrink_0()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_1();
-        if live.profiles.is_empty() {
-            profiles = profiles.child("No saved profiles. Add one in macOS VPN settings.");
-        }
-        for (index, profile) in live.profiles.iter().enumerate() {
-            let id = profile.id.as_str().to_owned();
-            let selected = self.draft.profile_id.as_deref() == Some(id.as_str());
-            let this = entity.clone();
-            let label = format!(
-                "{}{}{}",
-                if selected { "● " } else { "○ " },
-                profile.name,
-                if !profile.supported {
-                    " — unsupported"
-                } else if !profile.split_enabled {
-                    " — disable Send all traffic"
-                } else {
-                    ""
-                }
-            );
-            profiles = profiles.child(
-                button(
-                    ("profile", index),
-                    label,
-                    busy || live.state != SessionState::Disconnected,
-                    move |_, cx| {
-                        this.update(cx, |this, cx| {
-                            this.draft.profile_id = Some(id.clone());
-                            this.dirty = true;
-                            this.error = None;
-                            cx.notify();
-                        })
-                    },
-                )
-                .flex_shrink_0(),
-            );
-        }
-        let reload = button("reload-profiles", "Reload profiles", busy, |_, cx| {
-            tray::send(cx, Command::ReloadProfiles)
-        });
-        let import = entity.clone();
-        let export = entity.clone();
-        let save = entity.clone();
-        let login = entity.clone();
-        let focus_editor = self.editor.clone();
-        let login_label = if self.draft.launch_at_login {
-            "☑ Launch at login"
-        } else {
-            "☐ Launch at login"
-        };
-        root=root.child(profiles).child(reload)
-            .child(div().id("destinations-label").role(accesskit::Role::Label).aria_label("VPN destinations").font_weight(FontWeight::SEMIBOLD).cursor_pointer().on_click(move|_,window,cx|window.focus(&focus_editor.focus_handle(cx),cx)).child("VPN destinations"))
-            .child(self.editor.clone())
-            .child(div().text_sm().child("One IPv4, CIDR, or hostname per line. No URLs, wildcard domains, or IPv6. Hostname routes refresh every 5 minutes while active."))
-            .child(div().flex().gap_2()
-                .child(button("import-rules","Import…",busy,move|_,cx|import.update(cx,|this,cx|this.import(cx))))
-                .child(button("export-rules","Export…",busy,move|_,cx|export.update(cx,|this,cx|this.export(cx))))
-                .child(button("save-rules",if live.state==SessionState::Active{"Save / Apply"}else{"Save"},busy||self.awaiting_save,move|window,cx|save.update(cx,|this,cx|this.save(&SaveSettings,window,cx)))))
-            .child(button("launch-at-login",login_label,busy||live.state!=SessionState::Disconnected,move|_,cx|login.update(cx,|this,cx|{this.draft.launch_at_login = !this.draft.launch_at_login;this.dirty=true;cx.notify();})))
-            .child(div().flex().gap_2()
-                .child(button("connect-vpn",if live.state==SessionState::Disconnected{"Connect VPN"}else if live.adopted{"Clear routes / keep VPN"}else{"Disconnect VPN"},connection_action_disabled(&live, self.dirty, self.awaiting_save),move|_,cx|tray::send(cx,if live.state==SessionState::Disconnected{Command::Connect}else{Command::Disconnect})))
-                .child(button("retry-cleanup","Retry cleanup",live.helper_busy || (live.state!=SessionState::CleanupRequired && live.error!=Some(vpn_splitter_core::protocol::FaultCode::Cleanup)),|_,cx|tray::send(cx,Command::RetryCleanup))));
-        let helper = match live.helper_status {
-            -1 => {
-                "Helper: local setup required. Install / approve will request administrator permission and reopen the installed app."
-            }
-            0 => "Helper: not registered.",
-            1 => "Helper: installed.",
-            2 => "Helper: approval required in System Settings.",
-            _ => "Helper: bundle not installed.",
-        };
-        root = root
-            .child(div().text_sm().child(helper))
-            .child(button(
-                "install-helper",
-                "Install / approve helper…",
-                live.state != SessionState::Disconnected || live.preparing || live.helper_busy,
-                |_, cx| tray::send(cx, Command::InstallHelper),
-            ))
-            .child(button(
-                "remove-helper",
-                "Remove helper…",
-                live.state != SessionState::Disconnected
-                    || live.preparing
-                    || live.helper_busy
-                    || live.helper_status != 1,
-                |_, cx| tray::send(cx, Command::RemoveHelper),
-            ));
-        if let Some(error) = self
-            .error
-            .as_deref()
-            .or_else(|| live.error.map(controller::message))
-        {
-            root = root.child(
+        if self.dirty {
+            footer = footer.child(
                 div()
-                    .id("settings-error")
-                    .role(accesskit::Role::Alert)
-                    .aria_label(error.to_owned())
-                    .text_color(if dark { rgb(0xffada3) } else { rgb(0xa52b20) })
-                    .child(error.to_owned()),
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Unsaved changes. Save before connecting."),
             );
         }
-        if let Some(notice) = &self.notice {
-            root = root.child(div().text_sm().child(notice.clone()));
-        }
-        for warning in live.warnings {
-            root = root.child(div().text_sm().child(warning));
-        }
-        root
+        footer = footer.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .child(button(
+                    "save-rules",
+                    if live.state == SessionState::Active {
+                        "Save / Apply"
+                    } else {
+                        "Save changes"
+                    },
+                    busy || self.awaiting_save || !self.dirty,
+                    move |window, cx| {
+                        save.update(cx, |this, cx| this.save(&SaveSettings, window, cx))
+                    },
+                ))
+                .child(button(
+                    "connect-vpn",
+                    if live.state == SessionState::Disconnected {
+                        "Connect VPN"
+                    } else if live.adopted {
+                        "Clear routes / keep VPN"
+                    } else {
+                        "Disconnect VPN"
+                    },
+                    connection_action_disabled(&live, self.dirty, self.awaiting_save),
+                    move |_, cx| {
+                        tray::send(
+                            cx,
+                            if live.state == SessionState::Disconnected {
+                                Command::Connect
+                            } else {
+                                Command::Disconnect
+                            },
+                        )
+                    },
+                ))
+                .when(
+                    live.state == SessionState::CleanupRequired
+                        || live.error == Some(vpn_splitter_core::protocol::FaultCode::Cleanup),
+                    |row| {
+                        row.child(button(
+                            "retry-cleanup",
+                            "Retry cleanup",
+                            live.helper_busy,
+                            |_, cx| tray::send(cx, Command::RetryCleanup),
+                        ))
+                    },
+                ),
+        );
+
+        div()
+            .id("vpn-settings")
+            .track_focus(&self.focus_handle)
+            .role(accesskit::Role::Group)
+            .aria_label("VPN Splitter settings")
+            .key_context("Settings")
+            .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(Self::next))
+            .on_action(cx.listener(Self::previous))
+            .size_full()
+            .bg(bg)
+            .text_color(fg)
+            .text_size(px(14.))
+            .flex()
+            .child(sidebar)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(content)
+                    .child(footer),
+            )
     }
 }
 

@@ -218,7 +218,7 @@ pub fn menu(cx: &mut App) -> Vec<MenuItem> {
 }
 
 pub fn open_settings(cx: &mut App) {
-    open_page(cx, crate::settings::Page::Settings);
+    open_page(cx, crate::settings::Page::Vpn);
 }
 pub fn open_diagnostics(cx: &mut App) {
     open_page(cx, crate::settings::Page::Diagnostics);
@@ -244,10 +244,11 @@ fn open_page(cx: &mut App, page: crate::settings::Page) {
         refresh_menu(cx);
         return;
     }
-    let bounds = Bounds::centered(None, size(px(600.0), px(700.0)), cx);
+    let bounds = Bounds::centered(None, size(px(820.0), px(680.0)), cx);
     let result = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(720.0), px(520.0))),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("VPN Splitter".into()),
                 ..Default::default()
@@ -330,5 +331,9 @@ fn finish_quit(cx: &mut App) {
 }
 
 fn icon() -> gpui_tray::Result<Icon> {
-    Icon::from_rgba(include_bytes!("../assets/menubar-icon.rgba").to_vec(), 18, 18)
+    Icon::from_rgba(
+        include_bytes!("../assets/menubar-icon.rgba").to_vec(),
+        18,
+        18,
+    )
 }
