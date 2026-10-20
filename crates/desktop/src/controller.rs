@@ -957,6 +957,52 @@ mod tests {
         }
     }
     #[test]
+    fn native_vpn_loss_during_startup_dns_wait_cancels_retry() {
+        let mut session = Session::default();
+        session.handle(Event::Connect {
+            profile: profile().id,
+            already_connected: false,
+            now_ms: 0,
+        });
+        let id = session.id().unwrap();
+        session.handle(Event::Preflight {
+            session: id,
+            result: Ok(()),
+            now_ms: 1,
+        });
+        session.handle(native_event(session.state(), id, 1, 2).unwrap());
+        session.handle(Event::Planned {
+            session: id,
+            revision: 1,
+            result: Err(FaultCode::Dns),
+            now_ms: 3,
+        });
+        assert_eq!(session.deadline_ms(), Some(1003));
+        let effects = session.handle(native_event(session.state(), id, 2, 4).unwrap());
+        assert_eq!(session.state(), SessionState::Disconnected);
+        assert!(effects.is_empty());
+        assert_eq!(session.deadline_ms(), None);
+        assert!(
+            session
+                .handle(Event::Tick {
+                    session: id,
+                    now_ms: 1003
+                })
+                .is_empty()
+        );
+        assert!(
+            session
+                .handle(Event::Planned {
+                    session: id,
+                    revision: 1,
+                    result: Err(FaultCode::Dns),
+                    now_ms: 1004
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn native_failure_loss_and_network_switch_map_to_session_events_without_reconnect() {
         let id = SessionId::new();
         assert!(matches!(

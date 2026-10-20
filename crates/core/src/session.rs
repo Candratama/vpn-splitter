@@ -347,6 +347,14 @@ impl Session {
                     Err(code) => self.fail(code, now_ms),
                 }
             }
+            Event::Connected {
+                result: Err(_),
+                now_ms,
+                ..
+            } if self.phase == Phase::Planning => {
+                self.context.as_mut().unwrap().connected = false;
+                self.cleanup(now_ms)
+            }
             Event::Planned {
                 revision,
                 result,

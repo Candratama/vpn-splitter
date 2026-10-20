@@ -380,7 +380,10 @@ Cancel, VPN loss, another failure, or timeout. Active refresh failures continue
 to preserve the committed plan without startup retries. No partial plan is
 applied while waiting for DNS.
 
-Three regression tests failed before the change and passed afterward, covering
-successful retry without reconnecting, the fixed overall deadline, and Cancel
-with late results. The full release suite passed 76 tests with one ignored
-subprocess fixture. Live qualification of this change is still pending.
+Four regression tests failed before their fixes and passed afterward, covering
+successful retry without reconnecting, the fixed overall deadline, Cancel with
+late results, and a native disconnect delivered through the controller while
+waiting for DNS. The session handles that disconnect during planning as VPN
+loss, clears the retry and finishes cleanup immediately. The full release suite
+passed 77 tests with one ignored subprocess fixture. Live qualification of this
+change is still pending.
