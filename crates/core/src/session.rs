@@ -167,6 +167,7 @@ pub struct Session {
     state: SessionState,
     phase: Phase,
     deadline: Option<u64>,
+    dns_retry_at: Option<u64>,
     context: Option<Context>,
 }
 impl Default for Session {
@@ -175,6 +176,7 @@ impl Default for Session {
             state: SessionState::Disconnected,
             phase: Phase::Idle,
             deadline: None,
+            dns_retry_at: None,
             context: None,
         }
     }
@@ -187,7 +189,10 @@ impl Session {
         self.context.as_ref().map(|c| c.id)
     }
     pub fn deadline_ms(&self) -> Option<u64> {
-        self.deadline
+        match (self.deadline, self.dns_retry_at) {
+            (Some(deadline), Some(retry)) => Some(deadline.min(retry)),
+            (deadline, _) => deadline,
+        }
     }
     pub fn active_plan(&self) -> Option<&RoutePlan> {
         self.context.as_ref().and_then(|c| c.current.as_ref())
@@ -196,6 +201,7 @@ impl Session {
         *self = Self::default();
     }
     fn resolve(&mut self, now: u64) -> Vec<Effect> {
+        self.dns_retry_at = None;
         let c = self.context.as_mut().unwrap();
         c.revision += 1;
         c.refresh_pending = false;
@@ -227,6 +233,7 @@ impl Session {
         })]
     }
     fn cleanup(&mut self, now: u64) -> Vec<Effect> {
+        self.dns_retry_at = None;
         let c = self.context.as_mut().unwrap();
         c.refresh_pending = false;
         c.pending = None;
@@ -257,6 +264,7 @@ impl Session {
         effects
     }
     fn active(&mut self, now: u64) -> Vec<Effect> {
+        self.dns_retry_at = None;
         self.state = SessionState::Active;
         self.phase = Phase::Idle;
         self.deadline = None;
@@ -360,7 +368,16 @@ impl Session {
                         Ok(plan)
                     }
                 });
+                self.dns_retry_at = None;
                 match result {
+                    // macOS can report Connected before the VPN DNS resolver is ready.
+                    Err(FaultCode::Dns)
+                        if c.current.is_none()
+                            && self.deadline.is_some_and(|deadline| now_ms < deadline) =>
+                    {
+                        self.dns_retry_at = Some(now_ms.saturating_add(1_000));
+                        vec![]
+                    }
                     Err(code) if c.current.is_some() => {
                         let mut effects = self.active(now_ms);
                         effects.push(Effect::Notify { session: id, code });
@@ -504,6 +521,15 @@ impl Session {
                     self.fail(FaultCode::Timeout, now_ms)
                 }
             }
+            Event::Tick { now_ms, .. }
+                if self.phase == Phase::Planning
+                    && self.dns_retry_at.is_some_and(|retry| now_ms >= retry) =>
+            {
+                let deadline = self.deadline;
+                let effects = self.resolve(now_ms);
+                self.deadline = deadline;
+                effects
+            }
             Event::RetryCleanup { now_ms }
                 if self.state == SessionState::CleanupRequired && self.phase == Phase::Idle =>
             {
@@ -590,6 +616,138 @@ mod tests {
         });
         assert_eq!(s.state(), SessionState::Active);
         (s, id)
+    }
+
+    fn initial_dns_failure() -> (Session, SessionId) {
+        let (mut s, id) = start(false);
+        s.handle(Event::Preflight {
+            session: id,
+            result: Ok(()),
+            now_ms: 1,
+        });
+        s.handle(Event::Connected {
+            session: id,
+            result: Ok(()),
+            now_ms: 2,
+        });
+        let effects = s.handle(Event::Planned {
+            session: id,
+            revision: 1,
+            result: Err(FaultCode::Dns),
+            now_ms: 3,
+        });
+        assert!(
+            effects.is_empty(),
+            "Transient startup DNS must not disconnect the VPN"
+        );
+        (s, id)
+    }
+
+    #[test]
+    fn startup_dns_retries_then_applies_without_reconnecting() {
+        let (mut s, id) = initial_dns_failure();
+        assert_eq!(s.state(), SessionState::Connecting);
+        assert_eq!(s.deadline_ms(), Some(1003));
+        assert!(
+            s.handle(Event::Tick {
+                session: id,
+                now_ms: 1002
+            })
+            .is_empty()
+        );
+        assert!(matches!(
+            s.handle(Event::Tick {
+                session: id,
+                now_ms: 1003
+            })
+            .as_slice(),
+            [Effect::ResolvePlan { revision: 2, .. }]
+        ));
+        assert_eq!(s.deadline_ms(), Some(30002));
+        assert!(
+            s.handle(Event::Planned {
+                session: id,
+                revision: 1,
+                result: Ok(plan()),
+                now_ms: 1004
+            })
+            .is_empty()
+        );
+        assert!(matches!(
+            s.handle(Event::Planned {
+                session: id,
+                revision: 2,
+                result: Ok(plan()),
+                now_ms: 1005
+            })
+            .as_slice(),
+            [Effect::Helper(Request::Begin { .. })]
+        ));
+    }
+
+    #[test]
+    fn startup_dns_retries_never_extend_the_original_deadline() {
+        let (mut s, id) = initial_dns_failure();
+        let mut now = 1003;
+        for revision in 2..=30 {
+            assert!(matches!(
+                s.handle(Event::Tick {
+                    session: id,
+                    now_ms: now
+                })
+                .as_slice(),
+                [Effect::ResolvePlan { .. }]
+            ));
+            assert_eq!(s.deadline_ms(), Some(30002));
+            s.handle(Event::Planned {
+                session: id,
+                revision,
+                result: Err(FaultCode::Dns),
+                now_ms: now + 1,
+            });
+            now += 1001;
+        }
+        let effects = s.handle(Event::Tick {
+            session: id,
+            now_ms: 30002,
+        });
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DisconnectVpn { .. }))
+        );
+        assert_eq!(s.state(), SessionState::Disconnecting);
+        assert_eq!(s.deadline_ms(), Some(60002));
+    }
+
+    #[test]
+    fn cancel_during_startup_dns_wait_disconnects_without_late_retry() {
+        let (mut s, id) = initial_dns_failure();
+        assert!(matches!(
+            s.handle(Event::Cancel {
+                session: id,
+                now_ms: 4
+            })
+            .as_slice(),
+            [Effect::DisconnectVpn { .. }]
+        ));
+        assert_eq!(s.deadline_ms(), Some(30004));
+        assert!(
+            s.handle(Event::Tick {
+                session: id,
+                now_ms: 1003
+            })
+            .is_empty()
+        );
+        assert!(
+            s.handle(Event::Planned {
+                session: id,
+                revision: 1,
+                result: Ok(plan()),
+                now_ms: 1004
+            })
+            .is_empty()
+        );
     }
 
     #[test]

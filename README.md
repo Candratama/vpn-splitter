@@ -55,6 +55,10 @@ before building. Packaging does not upload or notarize the app.
 6. Choose **Connect VPN**. Check that routing becomes active before accessing
    office servers. Use **Disconnect VPN** when finished.
 
+On initial connection, the app retries unavailable hostname resolution once per
+second within its 30-second planning deadline. This gives macOS time to make the
+VPN DNS resolver available. Cancel remains available while waiting.
+
 Destination lists accept one IPv4 address, CIDR, or hostname per line:
 
 ```text
