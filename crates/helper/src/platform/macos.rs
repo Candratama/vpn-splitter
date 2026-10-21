@@ -331,7 +331,9 @@ unsafe extern "C" fn handle_request(
                 }
             }
         };
-        if unsafe { vs_monitor(i32::from(service.has_open_session())) } != 0 {
+        // Keep the network monitor attached while the helper is running. Toggling
+        // its dispatch queue on each disconnect can make the next Begin fail.
+        if service.has_open_session() && unsafe { vs_monitor(1) } != 0 {
             eprintln!("helper_monitor_failed connection={connection}");
             let _ = service.invalidated(connection);
             reply.result = vpn_splitter_core::protocol::ReplyResult::Rejected {
@@ -368,8 +370,10 @@ unsafe extern "C" fn invalidated(context: *mut std::ffi::c_void, connection: u64
         if service.invalidated(connection).is_err() {
             eprintln!("Owned-route cleanup requires reconciliation");
         }
-        unsafe {
-            vs_monitor(i32::from(service.has_open_session()));
+        if service.has_open_session() {
+            unsafe {
+                let _ = vs_monitor(1);
+            }
         }
     }));
 }
