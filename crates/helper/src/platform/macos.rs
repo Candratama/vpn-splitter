@@ -307,20 +307,37 @@ unsafe extern "C" fn handle_request(
                 .map_err(|_| Error::Permission)?
                 .to_owned(),
         };
-        let reply = service.request(
-            &peer,
-            unsafe { std::slice::from_raw_parts(bytes, length) },
-            &mut |profile, interface| {
-                let state = snapshot(profile)?;
-                if state.vpn != interface {
-                    return Err(Error::Conflict);
+        let bytes = unsafe { std::slice::from_raw_parts(bytes, length) };
+        let reply = service.request(&peer, bytes, &mut |profile, interface| {
+            let state = snapshot(profile)?;
+            if state.vpn != interface {
+                return Err(Error::Conflict);
+            }
+            Ok(state)
+        });
+        let mut reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                eprintln!(
+                    "helper_request_failed code={} connection={connection}",
+                    error.code()
+                );
+                vpn_splitter_core::protocol::Reply {
+                    header: vpn_splitter_core::protocol::Request::decode(bytes)?.header(),
+                    result: vpn_splitter_core::protocol::ReplyResult::Rejected {
+                        code: crate::service::fault(&error),
+                        previous_plan_restored: false,
+                    },
                 }
-                Ok(state)
-            },
-        )?;
+            }
+        };
         if unsafe { vs_monitor(i32::from(service.has_open_session())) } != 0 {
+            eprintln!("helper_monitor_failed connection={connection}");
             let _ = service.invalidated(connection);
-            return Err(Error::Cleanup);
+            reply.result = vpn_splitter_core::protocol::ReplyResult::Rejected {
+                code: vpn_splitter_core::protocol::FaultCode::Cleanup,
+                previous_plan_restored: false,
+            };
         }
         let reply = reply.encode()?;
         if reply.len() > capacity {
@@ -332,10 +349,17 @@ unsafe extern "C" fn handle_request(
         }
         Ok(())
     }));
-    if matches!(result, Ok(Ok(()))) {
-        0
-    } else {
-        libc::EACCES
+    match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            eprintln!("helper_bridge_failed code={}", error.code());
+            if matches!(error, Error::Permission) {
+                libc::EACCES
+            } else {
+                libc::EIO
+            }
+        }
+        Err(_) => libc::EIO,
     }
 }
 unsafe extern "C" fn invalidated(context: *mut std::ffi::c_void, connection: u64) {
