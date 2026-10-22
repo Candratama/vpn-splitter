@@ -366,3 +366,24 @@ tamper checks passed; Windows release binaries cross-compiled successfully.
 These corrections have not been installed or exercised with live VPN routes.
 Windows VPN integration remains deferred; successful cross-compilation does not
 qualify its currently unsupported platform operations.
+
+### Startup DNS readiness (2026-10-20)
+
+Read-only checks while the user had manually connected the VPN found usable IPv4
+answers for all 28 configured hostnames and a VPN-scoped DNS resolver. Earlier,
+13 names failed while disconnected. This supports a transient DNS-readiness
+hypothesis; the original automatic-connect timing has not been captured.
+
+Initial planning now retries DNS failures once per second within the original
+30-second planning deadline. Every attempt has a new revision. Retries stop on
+Cancel, VPN loss, another failure, or timeout. Active refresh failures continue
+to preserve the committed plan without startup retries. No partial plan is
+applied while waiting for DNS.
+
+Four regression tests failed before their fixes and passed afterward, covering
+successful retry without reconnecting, the fixed overall deadline, Cancel with
+late results, and a native disconnect delivered through the controller while
+waiting for DNS. The session handles that disconnect during planning as VPN
+loss, clears the retry and finishes cleanup immediately. The full release suite
+passed 77 tests with one ignored subprocess fixture. Live qualification of this
+change is still pending.
