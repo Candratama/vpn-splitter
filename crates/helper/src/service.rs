@@ -44,7 +44,7 @@ pub struct Service<B> {
     requirement: String,
     binding: Option<Binding>,
 }
-fn fault(error: &Error) -> vpn_splitter_core::protocol::FaultCode {
+pub(crate) fn fault(error: &Error) -> vpn_splitter_core::protocol::FaultCode {
     use vpn_splitter_core::protocol::FaultCode;
     match error {
         Error::InvalidInput(_) => FaultCode::InvalidInput,
@@ -242,6 +242,11 @@ impl<B: RouteBackend> Service<B> {
             }
             Request::Begin { .. } => unreachable!(),
         };
+        if matches!(result, ReplyResult::Cleared) {
+            // Cleanup is complete before acknowledging Clear. A new client must
+            // not depend on delivery of the old XPC invalidation callback.
+            self.binding = None;
+        }
         Ok(Reply { header, result })
     }
     pub fn network_is_valid(

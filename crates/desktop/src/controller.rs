@@ -87,7 +87,7 @@ pub fn message(code: FaultCode) -> &'static str {
     match code {
         FaultCode::InvalidInput => "Check the profile and destination rules.",
         FaultCode::Permission => {
-            "Permission denied or approval cancelled. Install the local helper and verify saved OS VPN credentials."
+            "VPN or helper access was denied. Check the saved VPN credentials and helper approval."
         }
         FaultCode::Timeout => "Operation timed out. Check VPN status or retry cleanup.",
         FaultCode::Conflict => {
@@ -239,11 +239,14 @@ fn run(
                 }
                 OsJob::Connect(id, profile) => match platform::connect(&profile) {
                     Ok(()) => continue,
-                    Err(error) => Command::Event(Event::Connected {
-                        session: id,
-                        result: Err(fault(&error)),
-                        now_ms: origin.elapsed().as_millis() as u64,
-                    }),
+                    Err(error) => {
+                        eprintln!("vpn_start_failed code={}", error.code());
+                        Command::Event(Event::Connected {
+                            session: id,
+                            result: Err(fault(&error)),
+                            now_ms: origin.elapsed().as_millis() as u64,
+                        })
+                    }
                 },
                 OsJob::Disconnect(id, profile) => {
                     let result = platform::disconnect(&profile);
@@ -276,49 +279,61 @@ fn run(
         for job in helper_rx {
             let command = match job {
                 HelperJob::Preflight(id, profile, adopted) => {
-                    let result = (|| -> Result<(), Error> {
-                        let profiles = platform::list_profiles()?;
-                        let p = selected_profile(&profiles, Some(profile.as_str()))?;
+                    let result = (|| -> Result<(), FaultCode> {
+                        let profiles = platform::list_profiles().map_err(|e| fault(&e))?;
+                        let p = selected_profile(&profiles, Some(profile.as_str()))
+                            .map_err(|e| fault(&e))?;
                         if p.connected != adopted {
-                            return Err(Error::Conflict);
+                            return Err(FaultCode::Conflict);
                         }
                         if platform::helper_status() != 1 {
-                            return Err(Error::Permission);
+                            eprintln!("connect_preflight_failed stage=helper_approval");
+                            return Err(FaultCode::Permission);
                         }
-                        let mut connection = platform::HelperClient::connect()?;
+                        let mut connection =
+                            platform::HelperClient::connect().map_err(|e| fault(&e))?;
                         let events = input.clone();
                         connection.observe_loss(move || {
                             let _ = events.send(Command::HelperLost(id));
                         });
                         client = Some(connection);
-                        let reply = client.as_mut().unwrap().request(Request::Status {
-                            header: Header {
-                                version: 1,
-                                session: id,
-                                sequence: 1,
-                            },
-                        })?;
-                        if !matches!(
-                            reply.result,
+                        let reply = client
+                            .as_mut()
+                            .unwrap()
+                            .request(Request::Status {
+                                header: Header {
+                                    version: 1,
+                                    session: id,
+                                    sequence: 1,
+                                },
+                            })
+                            .map_err(|e| fault(&e))?;
+                        match reply.result {
                             ReplyResult::Status {
                                 active: false,
-                                cleanup_required: false
-                            }
-                        ) {
-                            return Err(Error::Cleanup);
+                                cleanup_required: false,
+                            } => Ok(()),
+                            ReplyResult::Rejected { code, .. } => Err(code),
+                            _ => Err(FaultCode::Cleanup),
                         }
-                        Ok(())
                     })();
-                    if result.is_err() {
+                    if let Err(code) = &result {
+                        eprintln!("connect_preflight_failed code={code:?}");
                         client = None;
                     }
                     Command::Event(Event::Preflight {
                         session: id,
-                        result: result.map_err(|e| fault(&e)),
+                        result,
                         now_ms: origin.elapsed().as_millis() as u64,
                     })
                 }
                 HelperJob::Request(request) => {
+                    let operation = match &request {
+                        Request::Begin { .. } => "begin",
+                        Request::Apply { .. } => "apply",
+                        Request::Clear { .. } => "clear",
+                        Request::Status { .. } => "status",
+                    };
                     let header = request.header();
                     let reply = (|| -> Result<Reply, Error> {
                         if client.is_none() {
@@ -345,6 +360,9 @@ fn run(
                             }
                         }
                     };
+                    if let ReplyResult::Rejected { code, .. } = &reply.result {
+                        eprintln!("helper_request_failed operation={operation} code={code:?}");
+                    }
                     Command::Event(Event::Helper {
                         reply,
                         now_ms: origin.elapsed().as_millis() as u64,
@@ -956,6 +974,52 @@ mod tests {
             assert!(selected_profile(&[p], Some("stable-test-id")).is_err());
         }
     }
+    #[test]
+    fn native_vpn_loss_during_startup_dns_wait_cancels_retry() {
+        let mut session = Session::default();
+        session.handle(Event::Connect {
+            profile: profile().id,
+            already_connected: false,
+            now_ms: 0,
+        });
+        let id = session.id().unwrap();
+        session.handle(Event::Preflight {
+            session: id,
+            result: Ok(()),
+            now_ms: 1,
+        });
+        session.handle(native_event(session.state(), id, 1, 2).unwrap());
+        session.handle(Event::Planned {
+            session: id,
+            revision: 1,
+            result: Err(FaultCode::Dns),
+            now_ms: 3,
+        });
+        assert_eq!(session.deadline_ms(), Some(1003));
+        let effects = session.handle(native_event(session.state(), id, 2, 4).unwrap());
+        assert_eq!(session.state(), SessionState::Disconnected);
+        assert!(effects.is_empty());
+        assert_eq!(session.deadline_ms(), None);
+        assert!(
+            session
+                .handle(Event::Tick {
+                    session: id,
+                    now_ms: 1003
+                })
+                .is_empty()
+        );
+        assert!(
+            session
+                .handle(Event::Planned {
+                    session: id,
+                    revision: 1,
+                    result: Err(FaultCode::Dns),
+                    now_ms: 1004
+                })
+                .is_empty()
+        );
+    }
+
     #[test]
     fn native_failure_loss_and_network_switch_map_to_session_events_without_reconnect() {
         let id = SessionId::new();

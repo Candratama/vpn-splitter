@@ -57,6 +57,10 @@ lokal sebelum build. Proses packaging tidak mengunggah atau menotarisasi aplikas
 6. Pilih **Connect VPN**. Pastikan routing sudah aktif sebelum mengakses server
    kantor. Gunakan **Disconnect VPN** setelah selesai.
 
+Saat koneksi awal, aplikasi mencoba ulang hostname yang belum bisa di-resolve
+setiap satu detik, dengan batas waktu perencanaan 30 detik. Ini memberi macOS
+waktu untuk menyiapkan DNS VPN. Kamu tetap bisa membatalkan proses saat menunggu.
+
 Daftar tujuan menerima satu alamat IPv4, CIDR, atau hostname per baris:
 
 ```text

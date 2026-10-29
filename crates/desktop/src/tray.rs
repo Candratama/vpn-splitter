@@ -3,6 +3,11 @@ use gpui::{
     actions, point, px, size,
 };
 use gpui_tray::{Icon, Tray};
+use std::time::Duration;
+
+const SPINNER_FRAMES: usize = 12;
+const SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+const TRAY_ICON_SIZE: usize = 18;
 
 actions!(
     vpn_splitter,
@@ -32,11 +37,20 @@ struct Desktop {
     settings: Option<WindowHandle<crate::settings::Settings>>,
     view: crate::controller::View,
     commands: std::sync::mpsc::Sender<crate::controller::Command>,
+    tray_animating: bool,
+    tray_animation_generation: u64,
 }
 
 impl Global for Desktop {}
 
 pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        cx.set_reduce_motion(
+            NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion(),
+        );
+    }
     // Global actions can run while GPUI temporarily borrows the active window.
     // Defer handle updates until that dispatch finishes.
     cx.on_action(|action: &SelectProfile, cx| {
@@ -86,12 +100,15 @@ pub fn install(cx: &mut App) -> Result<Tray, Box<dyn std::error::Error>> {
         settings: None,
         view: crate::controller::View::default(),
         commands,
+        tray_animating: false,
+        tray_animation_generation: 0,
     });
     cx.spawn(async move |cx| {
         while let Ok(view) = updates.recv().await {
             cx.update(|cx| {
                 let quit_ready = view.quit_ready;
                 cx.global_mut::<Desktop>().view = view;
+                sync_tray_icon(cx);
                 refresh_menu(cx);
                 if let Some(handle) = cx.global::<Desktop>().settings {
                     let _ = handle.update(cx, |_, _, cx| cx.notify());
@@ -317,6 +334,93 @@ fn refresh_menu(cx: &mut App) {
     }
 }
 
+fn sync_tray_icon(cx: &mut App) {
+    use vpn_splitter_core::session::SessionState;
+
+    let animate = {
+        let view = &cx.global::<Desktop>().view;
+        !cx.reduce_motion()
+            && (view.preparing
+                || matches!(
+                    view.state,
+                    SessionState::Connecting | SessionState::Applying
+                ))
+    };
+    let generation = {
+        let desktop = cx.global_mut::<Desktop>();
+        if desktop.tray_animating == animate {
+            return;
+        }
+        desktop.tray_animating = animate;
+        desktop.tray_animation_generation = desktop.tray_animation_generation.wrapping_add(1);
+        desktop.tray_animation_generation
+    };
+
+    if !animate {
+        set_tray_icon(cx, icon());
+        return;
+    }
+
+    set_tray_icon(cx, spinner_icon(0));
+    cx.spawn(async move |cx| {
+        let mut frame = 1;
+        loop {
+            cx.background_executor().timer(SPINNER_INTERVAL).await;
+            let should_continue = cx.update(|cx| {
+                let desktop = cx.global::<Desktop>();
+                if !desktop.tray_animating || desktop.tray_animation_generation != generation {
+                    return false;
+                }
+                set_tray_icon(cx, spinner_icon(frame));
+                true
+            });
+            if !should_continue {
+                break;
+            }
+            frame = (frame + 1) % SPINNER_FRAMES;
+        }
+    })
+    .detach();
+}
+
+fn set_tray_icon(cx: &mut App, icon: gpui_tray::Result<Icon>) {
+    let tray = cx.global::<Desktop>().tray.clone();
+    match icon.and_then(|icon| tray.set_icon(Some(icon), cx)) {
+        Ok(()) => {}
+        Err(error) => eprintln!("Cannot update tray icon: {error}"),
+    }
+}
+
+fn spinner_icon(frame: usize) -> gpui_tray::Result<Icon> {
+    let mut rgba = vec![0; TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4];
+    let center = (TRAY_ICON_SIZE as f64 - 1.0) / 2.0;
+    for y in 0..TRAY_ICON_SIZE {
+        for x in 0..TRAY_ICON_SIZE {
+            let dx = x as f64 - center;
+            let dy = y as f64 - center;
+            let radius = dx.hypot(dy);
+            if !(3.0..=7.4).contains(&radius) {
+                continue;
+            }
+            let angle = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
+            let spoke = (0..SPINNER_FRAMES).find(|spoke| {
+                let spoke_angle = std::f64::consts::TAU * *spoke as f64 / SPINNER_FRAMES as f64;
+                let difference = (angle - spoke_angle).abs();
+                difference.min(std::f64::consts::TAU - difference) <= 0.22
+            });
+            let Some(spoke) = spoke else { continue };
+            let distance = (spoke + SPINNER_FRAMES - frame % SPINNER_FRAMES) % SPINNER_FRAMES;
+            let brightness = 48 + (207 * (SPINNER_FRAMES - distance) / SPINNER_FRAMES) as u8;
+            let edge = (radius - 3.0).min(7.4 - radius).clamp(0.0, 1.0);
+            let alpha = (brightness as f64 * edge).round() as u8;
+            let pixel = (y * TRAY_ICON_SIZE + x) * 4;
+            rgba[pixel..pixel + 3].fill(255);
+            rgba[pixel + 3] = alpha;
+        }
+    }
+    Icon::from_rgba(rgba, TRAY_ICON_SIZE as u32, TRAY_ICON_SIZE as u32)
+}
+
 fn quit(cx: &mut App) {
     send(cx, crate::controller::Command::Quit);
 }
@@ -335,7 +439,7 @@ fn finish_quit(cx: &mut App) {
 fn icon() -> gpui_tray::Result<Icon> {
     Icon::from_rgba(
         include_bytes!("../assets/menubar-icon.rgba").to_vec(),
-        18,
-        18,
+        TRAY_ICON_SIZE as u32,
+        TRAY_ICON_SIZE as u32,
     )
 }
